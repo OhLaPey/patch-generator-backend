@@ -1,0 +1,216 @@
+import { Patch } from '../config/mongodb.js';
+import { uploadToGCS } from '../config/gcs.js';
+import { generatePatchImage, extractDominantColors } from '../config/gemini.js';
+import { 
+  validateGenerationRequest, 
+  validateColorExtractionRequest,
+  sanitizeEmail 
+} from '../utils/validators.js';
+import { 
+  generatePatchId, 
+  generateFilename, 
+  getClientIP, 
+  logActivity 
+} from '../utils/helpers.js';
+import sharp from 'sharp';
+
+export const extractColors = async (req, res, next) => {
+  try {
+    const { logo } = req.body;
+
+    validateColorExtractionRequest({ logo });
+
+    logActivity('Color Extraction Started', { ipAddress: getClientIP(req) });
+
+    const dominantColors = await extractDominantColors(logo);
+
+    const allColors = ['#FFFFFF', ...dominantColors];
+
+    res.json({
+      success: true,
+      dominant_colors: dominantColors,
+      background_options: allColors,
+      border_options: dominantColors,
+    });
+  } catch (error) {
+    logActivity('Color Extraction Error', { message: error.message });
+    next(error);
+  }
+};
+
+export const generatePatch = async (req, res, next) => {
+  try {
+    const { logo, background_color, border_color, email, source = 'generator-page' } = req.body;
+
+    validateGenerationRequest({ logo, background_color, border_color, email });
+
+    const clientIP = getClientIP(req);
+    const patchId = generatePatchId();
+
+    logActivity('Patch Generation Started', { 
+      patchId, 
+      email, 
+      ipAddress: clientIP 
+    });
+
+    const patch = new Patch({
+      patch_id: patchId,
+      email: sanitizeEmail(email),
+      ip_address: clientIP,
+      user_agent: req.headers['user-agent'],
+      background_color,
+      border_color,
+      source,
+      status: 'processing',
+    });
+
+    await patch.save();
+
+    const logoBuffer = Buffer.from(logo, 'base64');
+
+    if (logoBuffer.length > 5 * 1024 * 1024) {
+      throw new Error('Logo file exceeds 5MB limit');
+    }
+
+    const optimizedLogoBuffer = await sharp(logoBuffer)
+      .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+      .png({ quality: 90 })
+      .toBuffer();
+
+    const patchImageUrl = await generatePatchImage(
+      optimizedLogoBuffer.toString('base64'),
+      background_color,
+      border_color
+    );
+
+    const generatedImageBuffer = Buffer.from(patchImageUrl, 'base64');
+    const gcsFilename = generateFilename(patchId, 'png');
+    const publicImageUrl = await uploadToGCS(gcsFilename, generatedImageBuffer, 'image/png');
+
+    patch.generated_image_url = publicImageUrl;
+    patch.generated_image_gcs_path = gcsFilename;
+    patch.status = 'generated';
+    await patch.save();
+
+    logActivity('Patch Generation Success', { patchId, imageUrl: publicImageUrl });
+
+    res.json({
+      success: true,
+      patch_id: patchId,
+      image_url: publicImageUrl,
+      background_color,
+      border_color,
+      created_at: patch.created_at,
+    });
+  } catch (error) {
+    logActivity('Patch Generation Error', { message: error.message });
+    
+    try {
+      await Patch.updateOne(
+        { patch_id: req.body.patch_id },
+        { status: 'error', error_message: error.message }
+      );
+    } catch {}
+
+    next(error);
+  }
+};
+
+export const getGallery = async (req, res, next) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 12, 100);
+    const skip = parseInt(req.query.skip) || 0;
+
+    const patches = await Patch.find({ status: 'generated' })
+      .select('patch_id generated_image_url background_color border_color created_at view_count')
+      .sort({ created_at: -1 })
+      .limit(limit)
+      .skip(skip);
+
+    const total = await Patch.countDocuments({ status: 'generated' });
+
+    await Promise.all(
+      patches.map((patch) =>
+        Patch.updateOne({ patch_id: patch.patch_id }, { $inc: { view_count: 1 } })
+      )
+    );
+
+    res.json({
+      success: true,
+      patches: patches.map((p) => ({
+        patch_id: p.patch_id,
+        image_url: p.generated_image_url,
+        background_color: p.background_color,
+        border_color: p.border_color,
+        created_at: p.created_at,
+        views: p.view_count + 1,
+      })),
+      pagination: {
+        total,
+        limit,
+        skip,
+        hasMore: skip + limit < total,
+      },
+    });
+  } catch (error) {
+    logActivity('Gallery Error', { message: error.message });
+    next(error);
+  }
+};
+
+export const getPatch = async (req, res, next) => {
+  try {
+    const { patchId } = req.params;
+
+    const patch = await Patch.findOne({ patch_id: patchId });
+
+    if (!patch) {
+      return res.status(404).json({ error: 'Patch not found' });
+    }
+
+    patch.view_count += 1;
+    await patch.save();
+
+    res.json({
+      success: true,
+      patch: {
+        patch_id: patch.patch_id,
+        image_url: patch.generated_image_url,
+        background_color: patch.background_color,
+        border_color: patch.border_color,
+        created_at: patch.created_at,
+        views: patch.view_count,
+        purchased: patch.purchased,
+      },
+    });
+  } catch (error) {
+    logActivity('Get Patch Error', { message: error.message });
+    next(error);
+  }
+};
+
+export const getStats = async (req, res, next) => {
+  try {
+    const totalPatches = await Patch.countDocuments();
+    const generatedPatches = await Patch.countDocuments({ status: 'generated' });
+    const soldPatches = await Patch.countDocuments({ purchased: true });
+    
+    const totalViews = await Patch.aggregate([
+      { $group: { _id: null, total_views: { $sum: '$view_count' } } }
+    ]);
+
+    res.json({
+      success: true,
+      stats: {
+        total_patches: totalPatches,
+        generated_patches: generatedPatches,
+        sold_patches: soldPatches,
+        total_views: totalViews?.total_views || 0,
+        timestamp: new Date().toISOString(),
+      },
+    });
+  } catch (error) {
+    logActivity('Stats Error', { message: error.message });
+    next(error);
+  }
+};
