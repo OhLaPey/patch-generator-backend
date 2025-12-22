@@ -178,6 +178,73 @@ app.post('/api/create-product', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+// AJOUT APRÈS TES IMPORTS
+
+import { extractDominantColors, generatePatchImage, initializeGemini } from './config/gemini.js';
+import multer from 'multer';
+
+const upload = multer({ dest: '/tmp' });
+
+// TE ENDPOINTS QUI MANQUENT
+app.post('/api/extract-colors', upload.single('logo'), async (req, res) => {
+  try {
+    const base64 = req.body.logo;
+    if (!base64) {
+      return res.status(400).json({ success: false, error: 'No logo provided' });
+    }
+
+    const colors = await extractDominantColors(base64);
+    
+    res.json({
+      success: true,
+      background_options: colors.slice(0, 3),
+      border_options: colors.slice(2, 5)
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/generate-patch', async (req, res) => {
+  try {
+    const { logo, background_color, border_color, email } = req.body;
+    
+    if (!logo || !background_color || !border_color) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+
+    const patchImage = await generatePatchImage(logo, background_color, border_color);
+    
+    res.json({
+      success: true,
+      patch_id: 'patch_' + Date.now(),
+      image_url: patchImage,
+      background_color,
+      border_color
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/create-product', async (req, res) => {
+  try {
+    const { patch_id, image_url, background_color, border_color, customer_email } = req.body;
+    
+    res.json({
+      success: true,
+      product_id: 'prod_' + Date.now(),
+      product_handle: 'patch-' + patch_id,
+      price: 1000 // €10.00
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
 
 // Start server
 app.listen(PORT, () => {
