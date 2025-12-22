@@ -67,13 +67,13 @@ export const generatePatchImage = async (logoBase64, backgroundColor, borderColo
 
     const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash-image' });
 
-    const prompt =
-      'Design an embroidered patch based on this club logo. ' +
-      'Background color: ' +
-      backgroundColor +
-      '. Border color: ' +
-      borderColor +
-      '. Square format, detailed embroidery texture, high quality, production-ready mockup.';
+    const prompt = `
+Front view of a square embroidered fabric patch on a pure white background.
+The patch has thick satin-stitched borders (bourdon stitch) in this color: ${borderColor}.
+The main fabric background of the patch is this color: ${backgroundColor}.
+Inside the square, the input logo is recreated with realistic embroidery thread texture and stitching, not flat print.
+Photorealistic product shot, studio lighting, sharp details, no extra text, no additional graphics, high resolution.
+`;
 
     const result = await model.generateContent([
       {
@@ -84,6 +84,25 @@ export const generatePatchImage = async (logoBase64, backgroundColor, borderColo
       },
       prompt,
     ]);
+
+    const imagePart = result.response.candidates[0].content.parts.find(
+      (p) => p.inlineData
+    );
+
+    if (!imagePart || !imagePart.inlineData || !imagePart.inlineData.data) {
+      throw new Error('No image data returned by Gemini');
+    }
+
+    const base64Image = imagePart.inlineData.data;
+    const dataUrl = `data:image/png;base64,${base64Image}`;
+
+    console.log('Patch image generated');
+    return dataUrl;
+  } catch (error) {
+    console.error('Patch generation error:', error.message);
+    throw new Error('Failed to generate patch: ' + error.message);
+  }
+};
 
     // Récupérer la partie image générée
     const imagePart = result.response.candidates[0].content.parts.find(
