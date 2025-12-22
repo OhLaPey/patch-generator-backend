@@ -14,8 +14,10 @@ const upload = multer({ dest: '/tmp' });
 
 // ☁️ Google Cloud Storage
 const storage = new Storage({
-  projectId: process.env.GCP_PROJECT_ID,
-  keyFilename: process.env.GCP_KEY_FILE,
+  projectId: process.env.GOOGLE_CLOUD_PROJECT_ID,
+  credentials: process.env.GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON 
+    ? JSON.parse(process.env.GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON)
+    : undefined,
 });
 const bucket = storage.bucket(process.env.GCS_BUCKET_NAME);
 
