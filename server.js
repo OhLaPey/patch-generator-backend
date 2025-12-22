@@ -15,9 +15,16 @@ const upload = multer({ dest: '/tmp' });
 // ☁️ Google Cloud Storage
 const storage = new Storage({
   projectId: process.env.GCP_PROJECT_ID,
-  credentials: JSON.parse(process.env.GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON || '{}'),
+  keyFilename: process.env.GCP_KEY_FILE,
 });
 const bucket = storage.bucket(process.env.GCS_BUCKET_NAME);
+
+// Vérifie que GCS est bien configuré
+console.log('🔧 GCS Config:', {
+  project: process.env.GCP_PROJECT_ID,
+  bucket: process.env.GCS_BUCKET_NAME,
+  keyFile: process.env.GCP_KEY_FILE ? '✅ Present' : '❌ Missing',
+});
 
 // 🌍 CORS (une seule fois)
 app.use(cors({
