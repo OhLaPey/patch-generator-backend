@@ -13,7 +13,7 @@ export async function extractDominantColors(base64Image) {
     
     const model = genAI.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
     
-    const prompt = 'Analyze this image and extract the 5 most dominant colors. Return ONLY valid JSON with background_options and border_options arrays. Example: {"background_options": ["#FFFFFF", "#F0F0F0"], "border_options": ["#000000", "#333333"]}';
+    const prompt = 'Analyze this image and extract 5 dominant colors. Return ONLY JSON: {"background_options": ["#COLOR1", "#COLOR2", "#COLOR3"], "border_options": ["#COLOR1", "#COLOR2", "#COLOR3"]}';
 
     const response = await model.generateContent([
       {
@@ -30,7 +30,7 @@ export async function extractDominantColors(base64Image) {
 
     let jsonText = text;
     
-    // Remove markdown code blocks if present
+    // Remove markdown code blocks
     if (text.includes('```
       jsonText = text.split('```json').split('```
     } else if (text.includes('```')) {
@@ -45,7 +45,7 @@ export async function extractDominantColors(base64Image) {
       border_options: colors.border_options || ['#000000', '#333333', '#666666'],
     };
   } catch (error) {
-    console.error('❌ Color extraction error:', error.message);
+    console.error('Color extraction error:', error.message);
     throw new Error('Failed to extract colors: ' + error.message);
   }
 }
@@ -56,17 +56,21 @@ export async function generatePatchImage(options) {
     
     const model = genAI.getGenerativeModel({ model: 'models/gemini-2.5-flash-image' });
     
-    const prompt = 'Create a professional embroidered patch design. Background color: ' + options.background_color + '. Border/thread color: ' + options.border_color + '. Style: Professional embroidered patch with realistic stitching. Size: Square 512x512px. White background for preview.';
+    const bgColor = options.background_color;
+    const borderColor = options.border_color;
+    
+    const prompt = 'Create a professional embroidered patch design. Background color: ' + bgColor + '. Border thread color: ' + borderColor + '. Make it look like a real embroidered patch product photo. Square 512x512px on white background.';
 
     const response = await model.generateContent(prompt);
     
     const imageData = response.response.candidates[0].content.parts[0].inlineData.data;
+    
     return {
       success: true,
       image_url: 'data:image/png;base64,' + imageData,
     };
   } catch (error) {
-    console.error('❌ Image generation error:', error.message);
+    console.error('Image generation error:', error.message);
     throw new Error('Failed to generate patch: ' + error.message);
   }
 }
