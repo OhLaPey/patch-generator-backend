@@ -1,76 +1,81 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import dotenv from 'dotenv';
 
-const apiKey = process.env.GOOGLE_API_KEY;
-if (!apiKey) {
-  throw new Error('GOOGLE_API_KEY not set in environment variables');
-}
+dotenv.config();
 
-const genAI = new GoogleGenerativeAI(apiKey);
+let client;
 
-export async function extractDominantColors(base64Image) {
+export const initializeGemini = () => {
   try {
-    console.log('🎨 Extracting colors from image...');
-    
-    const model = genAI.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
-    
-    const prompt = 'Analyze this image and extract 5 dominant colors. Return ONLY JSON: {"background_options": ["#COLOR1", "#COLOR2", "#COLOR3"], "border_options": ["#COLOR1", "#COLOR2", "#COLOR3"]}';
+    client = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+    console.log('Gemini API initialized');
+    return client;
+  } catch (error) {
+    console.error('Gemini init error:', error.message);
+    throw error;
+  }
+};
+
+export const extractDominantColors = async (imageBase64) => {
+  try {
+    if (!client) {
+      initializeGemini();
+    }
+
+    const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
+
+    const prompt = 'Analyze this image and extract the 5 most dominant colors. Return ONLY a JSON array with hex color codes like this: ["#FF5733", "#2E86AB", "#A23B72", "#F18F01", "#C73E1D"]';
 
     const response = await model.generateContent([
       {
         inlineData: {
+          data: imageBase64,
           mimeType: 'image/png',
-          data: base64Image,
         },
       },
       prompt,
     ]);
 
-    const text = response.response.text().trim();
-    console.log('📝 Raw response:', text);
-
-    let jsonText = text;
+    const responseText = response.response.text();
+    const colors = JSON.parse(responseText);
     
-    // Remove markdown code blocks
-    if (text.includes('```
-      jsonText = text.split('```json').split('```
-    } else if (text.includes('```')) {
-      jsonText = text.split('``````')[0].trim();
-    }
-    
-    const colors = JSON.parse(jsonText);
-    
-    return {
-      success: true,
-      background_options: colors.background_options || ['#FFFFFF', '#F0F0F0', '#E8E8E8'],
-      border_options: colors.border_options || ['#000000', '#333333', '#666666'],
-    };
+    console.log('Colors extracted:', colors);
+    return colors;
   } catch (error) {
     console.error('Color extraction error:', error.message);
     throw new Error('Failed to extract colors: ' + error.message);
   }
-}
+};
 
-export async function generatePatchImage(options) {
+export const generatePatchImage = async (logoBase64, backgroundColor, borderColor) => {
   try {
-    console.log('🎨 Generating patch image...');
-    
-    const model = genAI.getGenerativeModel({ model: 'models/gemini-2.5-flash-image' });
-    
-    const bgColor = options.background_color;
-    const borderColor = options.border_color;
-    
-    const prompt = 'Create a professional embroidered patch design. Background color: ' + bgColor + '. Border thread color: ' + borderColor + '. Make it look like a real embroidered patch product photo. Square 512x512px on white background.';
+    if (!client) {
+      initializeGemini();
+    }
 
-    const response = await model.generateContent(prompt);
+    const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash-image' });
+
+    const prompt = 'Design an embroidered patch. Background: ' + backgroundColor + '. Border: ' + borderColor + '. Square format, professional style, production-ready.';
+
+    const response = await model.generateContent([
+      {
+        inlineData: {
+          data: logoBase64,
+          mimeType: 'image/png',
+        },
+      },
+      prompt,
+    ]);
+
+    const responseText = response.response.text();
     
-    const imageData = response.response.candidates[0].content.parts[0].inlineData.data;
+    console.log('Patch image generated');
     
-    return {
-      success: true,
-      image_url: 'data:image/png;base64,' + imageData,
-    };
+    return responseText;
   } catch (error) {
-    console.error('Image generation error:', error.message);
+    console.error('Patch generation error:', error.message);
     throw new Error('Failed to generate patch: ' + error.message);
   }
-}
+};
+
+export const getGeminiClient = () => client;
