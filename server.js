@@ -1,16 +1,29 @@
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
+import rateLimit from 'express-rate-limit';
 import { initializeGemini, extractDominantColors, generatePatchImage } from './config/gemini.js';
 
 const app = express();
 const upload = multer({ dest: '/tmp' });
 
+// Middleware
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb' }));
 
-// Initialize Gemini on startup
+// Rate limiter
+const rateLimiter = rateLimit({
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '86400000'),
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '5'),
+  message: 'Too many patch generations, try again later',
+  skip: (req) => !req.path.includes('/generate-patch'),
+  keyGenerator: (req) => req.ip || req.connection.remoteAddress,
+});
+
+app.use(rateLimiter);
+
+// Initialize Gemini
 initializeGemini();
 
 // Health check
@@ -18,7 +31,7 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Extract colors from logo
+// Extract colors
 app.post('/api/extract-colors', async (req, res) => {
   try {
     const { logo } = req.body;
@@ -39,13 +52,13 @@ app.post('/api/extract-colors', async (req, res) => {
   }
 });
 
-// Generate patch image
+// Generate patch
 app.post('/api/generate-patch', async (req, res) => {
   try {
     const { logo, background_color, border_color, email } = req.body;
     
     if (!logo || !background_color || !border_color) {
-      return res.status(400).json({ success: false, error: 'Missing required fields' });
+      return res.status(400).json({ success: false, error: 'Missing fields' });
     }
 
     const patchImage = await generatePatchImage(logo, background_color, border_color);
@@ -63,7 +76,7 @@ app.post('/api/generate-patch', async (req, res) => {
   }
 });
 
-// Create Shopify product
+// Create product
 app.post('/api/create-product', async (req, res) => {
   try {
     const { patch_id, image_url, background_color, border_color, customer_email } = req.body;
@@ -80,7 +93,16 @@ app.post('/api/create-product', async (req, res) => {
   }
 });
 
-// Start server
+// Error handler
+const errorHandler = (err, req, res, next) => {
+  console.error('Error:', { message: err.message, path: req.path });
+  const statusCode = err.statusCode || 500;
+  res.status(statusCode).json({ success: false, error: err.message || 'Server error' });
+};
+
+app.use(errorHandler);
+
+// Start
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
