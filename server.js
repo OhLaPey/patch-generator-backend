@@ -55,6 +55,127 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
+// Créer un produit Shopify automatiquement
+app.post('/api/create-product', async (req, res) => {
+  try {
+    const { patch_id, image_url, background_color, border_color, customer_email } = req.body;
+
+    const shopName = process.env.SHOPIFY_SHOP_NAME;
+    const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+
+    if (!shopName || !accessToken) {
+      return res.status(500).json({ success: false, error: 'Shopify credentials missing' });
+    }
+
+    // Créer le produit
+    const productData = {
+      product: {
+        title: `Patch Personnalisé - ${patch_id}`,
+        body_html: `<p>Patch brodé personnalisé selon votre création</p>
+                    <p><strong>Fond:</strong> ${background_color}</p>
+                    <p><strong>Bordure:</strong> ${border_color}</p>
+                    <p><strong>Référence:</strong> ${patch_id}</p>`,
+        vendor: 'PPATCH',
+        product_type: 'Patch Personnalisé',
+        tags: 'personnalisé, brodé, patch',
+        images: [
+          {
+            src: image_url,
+            alt: `Patch Personnalisé ${patch_id}`
+          }
+        ],
+        variants: [
+          {
+            title: 'Default Title',
+            price: '10.00',
+            sku: patch_id,
+            barcode: patch_id,
+            metafields: [
+              {
+                namespace: 'custom',
+                key: 'patch_id',
+                value: patch_id,
+                type: 'single_line_text_field'
+              },
+              {
+                namespace: 'custom',
+                key: 'background_color',
+                value: background_color,
+                type: 'single_line_text_field'
+              },
+              {
+                namespace: 'custom',
+                key: 'border_color',
+                value: border_color,
+                type: 'single_line_text_field'
+              },
+              {
+                namespace: 'custom',
+                key: 'customer_email',
+                value: customer_email,
+                type: 'single_line_text_field'
+              }
+            ]
+          }
+        ],
+        metafields: [
+          {
+            namespace: 'custom',
+            key: 'patch_id',
+            value: patch_id,
+            type: 'single_line_text_field'
+          }
+        ]
+      }
+    };
+
+    const response = await fetch(
+      `https://${shopName}/admin/api/2024-01/products.json`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Shopify-Access-Token': accessToken
+        },
+        body: JSON.stringify(productData)
+      }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      console.error('Shopify error:', result);
+      return res.status(400).json({ success: false, error: result.errors });
+    }
+
+    // Sauvegarder dans MongoDB que ce patch a été commandé
+    const db = client.db('patch-generator');
+    await db.collection('patches').updateOne(
+      { patch_id: patch_id },
+      {
+        $set: {
+          shopify_product_id: result.product.id,
+          shopify_handle: result.product.handle,
+          ordered: true,
+          ordered_at: new Date(),
+          customer_email: customer_email
+        }
+      }
+    );
+
+    res.json({
+      success: true,
+      product_id: result.product.id,
+      product_handle: result.product.handle,
+      shop_url: `https://${shopName}/products/${result.product.handle}`
+    });
+
+  } catch (error) {
+    console.error('Error creating product:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
@@ -62,3 +183,4 @@ app.listen(PORT, () => {
 });
 
 export default app;
+
