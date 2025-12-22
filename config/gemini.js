@@ -24,7 +24,7 @@ export const extractDominantColors = async (imageBase64) => {
 
     const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
 
-    const prompt = 'Analyze this image and extract the 5 most dominant colors. Return ONLY a JSON array with hex color codes like this: ["#FF5733", "#2E86AB", "#A23B72", "#F18F01", "#C73E1D"]';
+    const prompt = 'Analyze this image and extract the 5 most dominant colors. Return ONLY these 5 hex colors as a JSON array. Nothing else. No explanation. Example format: ["#FF5733","#2E86AB","#A23B72","#F18F01","#C73E1D"]';
 
     const response = await model.generateContent([
       {
@@ -36,16 +36,38 @@ export const extractDominantColors = async (imageBase64) => {
       prompt,
     ]);
 
-    const responseText = response.response.text();
+    let responseText = response.response.text().trim();
+    
+    console.log('Raw Gemini response:', responseText);
+    
+    // Clean up the response - remove markdown code blocks
+    if (responseText.includes('```
+      responseText = responseText.split('```json').split('```
+    } else if (responseText.includes('```')) {
+      responseText = responseText.split('``````')[0].trim();
+    }
+    
+    // Extract JSON array if wrapped in text
+    const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      responseText = jsonMatch[0];
+    }
+    
     const colors = JSON.parse(responseText);
     
-    console.log('Colors extracted:', colors);
-    return colors;
+    console.log('Extracted colors:', colors);
+    
+    // Return object with background and border options
+    return {
+      background_options: colors.slice(0, 3),
+      border_options: colors.slice(2, 5)
+    };
   } catch (error) {
     console.error('Color extraction error:', error.message);
     throw new Error('Failed to extract colors: ' + error.message);
   }
 };
+
 
 export const generatePatchImage = async (logoBase64, backgroundColor, borderColor) => {
   try {
