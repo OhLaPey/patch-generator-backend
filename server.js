@@ -13,7 +13,7 @@ const upload = multer({ dest: '/tmp' });
 
 // 🌍 CORS (une seule fois)
 app.use(cors({
-  origin: ['https://ppatch.shop', 'https://www.ppatch.shop']
+  origin: ['https://ppatch.shop', 'https://www.ppatch.shop'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
