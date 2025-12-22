@@ -24,7 +24,9 @@ export const extractDominantColors = async (imageBase64) => {
 
     const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
 
-    const prompt = 'Analyze this image and extract the 5 most dominant colors. Return ONLY a JSON array of hex colors. Example: ["#FF5733","#2E86AB","#A23B72","#F18F01","#C73E1D"]';
+    const prompt =
+      'Analyze this image and extract the 5 most dominant colors. ' +
+      'Return ONLY a JSON array of hex colors. Example: ["#FF5733","#2E86AB","#A23B72","#F18F01","#C73E1D"].';
 
     const response = await model.generateContent([
       {
@@ -37,22 +39,19 @@ export const extractDominantColors = async (imageBase64) => {
     ]);
 
     let responseText = response.response.text().trim();
-    
     console.log('Raw response:', responseText);
-    
-    // Extract JSON array from text (works with or without markdown)
+
     const jsonMatch = responseText.match(/\[[\s\S]*\]/);
     if (!jsonMatch) {
       throw new Error('No JSON array found in response');
     }
-    
+
     const colors = JSON.parse(jsonMatch[0]);
-    
     console.log('Colors extracted:', colors);
-    
+
     return {
       background_options: colors.slice(0, 3),
-      border_options: colors.slice(2, 5)
+      border_options: colors.slice(2, 5),
     };
   } catch (error) {
     console.error('Color extraction error:', error.message);
@@ -68,9 +67,15 @@ export const generatePatchImage = async (logoBase64, backgroundColor, borderColo
 
     const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash-image' });
 
-    const prompt = 'Design an embroidered patch. Background: ' + backgroundColor + '. Border: ' + borderColor + '. Square format, professional style, production-ready.';
+    const prompt =
+      'Design an embroidered patch based on this club logo. ' +
+      'Background color: ' +
+      backgroundColor +
+      '. Border color: ' +
+      borderColor +
+      '. Square format, detailed embroidery texture, high quality, production-ready mockup.';
 
-    const response = await model.generateContent([
+    const result = await model.generateContent([
       {
         inlineData: {
           data: logoBase64,
@@ -80,11 +85,20 @@ export const generatePatchImage = async (logoBase64, backgroundColor, borderColo
       prompt,
     ]);
 
-    const responseText = response.response.text();
-    
+    // Récupérer la partie image générée
+    const imagePart = result.response.candidates[0].content.parts.find(
+      (p) => p.inlineData
+    );
+
+    if (!imagePart || !imagePart.inlineData || !imagePart.inlineData.data) {
+      throw new Error('No image data returned by Gemini');
+    }
+
+    const base64Image = imagePart.inlineData.data; // déjà base64
+    const dataUrl = `data:image/png;base64,${base64Image}`;
+
     console.log('Patch image generated');
-    
-    return responseText;
+    return dataUrl;
   } catch (error) {
     console.error('Patch generation error:', error.message);
     throw new Error('Failed to generate patch: ' + error.message);
