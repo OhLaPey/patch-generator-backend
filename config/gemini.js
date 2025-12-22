@@ -103,25 +103,3 @@ Photorealistic product shot, studio lighting, sharp details, no extra text, no a
     throw new Error('Failed to generate patch: ' + error.message);
   }
 };
-
-    // Récupérer la partie image générée
-    const imagePart = result.response.candidates[0].content.parts.find(
-      (p) => p.inlineData
-    );
-
-    if (!imagePart || !imagePart.inlineData || !imagePart.inlineData.data) {
-      throw new Error('No image data returned by Gemini');
-    }
-
-    const base64Image = imagePart.inlineData.data; // déjà base64
-    const dataUrl = `data:image/png;base64,${base64Image}`;
-
-    console.log('Patch image generated');
-    return dataUrl;
-  } catch (error) {
-    console.error('Patch generation error:', error.message);
-    throw new Error('Failed to generate patch: ' + error.message);
-  }
-};
-
-export const getGeminiClient = () => client;
