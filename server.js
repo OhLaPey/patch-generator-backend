@@ -7,6 +7,7 @@ import { initializeGemini } from './config/gemini.js';
 import patchRoutes from './routes/patchRoutes.js';
 import errorHandler from './middleware/errorHandler.js';
 import rateLimiter from './middleware/rateLimiter.js';
+import mongoose from 'mongoose';
 
 dotenv.config();
 
@@ -149,7 +150,7 @@ app.post('/api/create-product', async (req, res) => {
     }
 
     // Sauvegarder dans MongoDB que ce patch a été commandé
-    const db = client.db('patch-generator');
+    const db = mongoose.connection.db;
     await db.collection('patches').updateOne(
       { patch_id: patch_id },
       {
