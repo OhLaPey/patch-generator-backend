@@ -24,7 +24,7 @@ export const extractDominantColors = async (imageBase64) => {
 
     const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
 
-    const prompt = 'Analyze this image and extract the 5 most dominant colors. Return ONLY these 5 hex colors as a JSON array. Nothing else. No explanation. Example format: ["#FF5733","#2E86AB","#A23B72","#F18F01","#C73E1D"]';
+    const prompt = 'Analyze this image and extract the 5 most dominant colors. Return ONLY a JSON array of hex colors. Example: ["#FF5733","#2E86AB","#A23B72","#F18F01","#C73E1D"]';
 
     const response = await model.generateContent([
       {
@@ -38,26 +38,18 @@ export const extractDominantColors = async (imageBase64) => {
 
     let responseText = response.response.text().trim();
     
-    console.log('Raw Gemini response:', responseText);
+    console.log('Raw response:', responseText);
     
-    // Clean up the response - remove markdown code blocks
-    if (responseText.includes('```
-      responseText = responseText.split('```json').split('```
-    } else if (responseText.includes('```')) {
-      responseText = responseText.split('``````')[0].trim();
-    }
-    
-    // Extract JSON array if wrapped in text
+    // Extract JSON array from text (works with or without markdown)
     const jsonMatch = responseText.match(/\[[\s\S]*\]/);
-    if (jsonMatch) {
-      responseText = jsonMatch[0];
+    if (!jsonMatch) {
+      throw new Error('No JSON array found in response');
     }
     
-    const colors = JSON.parse(responseText);
+    const colors = JSON.parse(jsonMatch[0]);
     
-    console.log('Extracted colors:', colors);
+    console.log('Colors extracted:', colors);
     
-    // Return object with background and border options
     return {
       background_options: colors.slice(0, 3),
       border_options: colors.slice(2, 5)
@@ -67,7 +59,6 @@ export const extractDominantColors = async (imageBase64) => {
     throw new Error('Failed to extract colors: ' + error.message);
   }
 };
-
 
 export const generatePatchImage = async (logoBase64, backgroundColor, borderColor) => {
   try {
