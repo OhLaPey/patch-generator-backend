@@ -186,24 +186,25 @@ import multer from 'multer';
 const upload = multer({ dest: '/tmp' });
 
 // TE ENDPOINTS QUI MANQUENT
-app.post('/api/extract-colors', upload.single('logo'), async (req, res) => {
+app.post('/api/extract-colors', async (req, res) => {
   try {
     const base64 = req.body.logo;
     if (!base64) {
       return res.status(400).json({ success: false, error: 'No logo provided' });
     }
 
-    const colors = await extractDominantColors(base64);
+    const colorsData = await extractDominantColors(base64);
     
     res.json({
       success: true,
-      background_options: colors.slice(0, 3),
-      border_options: colors.slice(2, 5)
+      background_options: colorsData.background_options,
+      border_options: colorsData.border_options
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
 
 app.post('/api/generate-patch', async (req, res) => {
   try {
