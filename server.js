@@ -31,47 +31,26 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Extraire les couleurs du logo
-async function extractColors() {
-  if (!uploadedImageBase64) return;
-
+// Extract colors
+app.post('/api/extract-colors', async (req, res) => {
   try {
-    console.log('Appel API extract-colors...');
-    const res = await fetch(API_URL + '/api/extract-colors', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ logo: uploadedImageBase64 })
-    });
+    const { logo } = req.body;
+    if (!logo) {
+      return res.status(400).json({ success: false, error: 'No logo provided' });
+    }
 
-    const data = await res.json();
-    console.log('Réponse API:', data);
+    const colorsData = await extractDominantColors(logo);
     
-    if (!data.success) {
-      console.error('Erreur API:', data.error);
-      return;
-    }
-
-    // Récupérer les options de couleurs
-    const bgColors = data.background_options || [];
-    const borderColors = data.border_options || [];
-
-    console.log('Couleurs fond:', bgColors);
-    console.log('Couleurs bordure:', borderColors);
-
-    if (bgColors.length > 0) {
-      displayColorPalette('ppatch-bg-colors-grid', bgColors, 'bg');
-      selectedBgColor = bgColors[0];
-    }
-
-    if (borderColors.length > 0) {
-      displayColorPalette('ppatch-border-colors-grid', borderColors, 'border');
-      selectedBorderColor = borderColors[0];
-    }
-  } catch (e) {
-    console.error('Erreur extraction couleurs:', e);
+    res.json({
+      success: true,
+      background_options: colorsData.background_options,
+      border_options: colorsData.border_options
+    });
+  } catch (error) {
+    console.error('Extract colors error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
-}
-
+});
 
 // Generate patch
 app.post('/api/generate-patch', async (req, res) => {
