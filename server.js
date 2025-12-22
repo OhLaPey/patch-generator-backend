@@ -3,9 +3,16 @@ import cors from 'cors';
 import multer from 'multer';
 import rateLimit from 'express-rate-limit';
 import { initializeGemini, extractDominantColors, generatePatchImage } from './config/gemini.js';
+import cors from 'cors';
 
 const app = express();
 const upload = multer({ dest: '/tmp' });
+
+app.use(cors({
+  origin: '*', // pour debug, puis tu restreindras à https://ppatch.shop
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 
 // ⭐ CORS FIX
 app.use(cors({
