@@ -180,7 +180,7 @@ app.post('/api/create-product', async (req, res) => {
 });
 // AJOUT APRÈS TES IMPORTS
 
-import { extractDominantColors, generatePatchImage, initializeGemini } from './config/gemini.js';
+import { extractDominantColors, generatePatchImage } from './config/gemini.js';
 import multer from 'multer';
 
 const upload = multer({ dest: '/tmp' });
