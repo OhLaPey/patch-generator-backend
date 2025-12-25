@@ -27,6 +27,7 @@ export const initializeGCS = () => {
     });
 
     bucket = storage.bucket(process.env.GOOGLE_CLOUD_STORAGE_BUCKET);
+    
     console.log('✅ Google Cloud Storage initialized');
     return bucket;
   } catch (error) {
@@ -39,24 +40,24 @@ export const uploadToGCS = async (filename, buffer, contentType = 'image/png') =
   try {
     const file = bucket.file(filename);
     
+    // ✅ CORRIGÉ: Upload avec public: true au lieu de makePublic()
     await file.save(buffer, {
       metadata: {
         contentType: contentType,
         cacheControl: 'public, max-age=86400', // 24h cache
       },
+      public: true, // ✅ Rend le fichier public directement sans getIamPolicy
+      predefinedAcl: 'publicRead', // ✅ ACL publique
     });
 
-    // Make file public
-    await file.makePublic();
-
-    // Get public URL
+    // Get public URL (pas besoin de makePublic)
     const publicUrl = `https://storage.googleapis.com/${bucket.name}/${filename}`;
     
-    console.log(`✅ Uploaded to GCS: ${publicUrl}`);
+    console.log('✅ Uploaded to GCS:', publicUrl);
     return publicUrl;
   } catch (error) {
     console.error('❌ GCS upload error:', error.message);
-    throw new Error(`Failed to upload to GCS: ${error.message}`);
+    throw new Error('Failed to upload to GCS: ' + error.message);
   }
 };
 
