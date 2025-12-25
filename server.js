@@ -179,7 +179,20 @@ app.post('/api/register-user', async (req, res, next) => {
 // ============================================
 
 app.post('/api/extract-colors', extractColors);
-app.post('/api/generate-patch', rateLimiter, generatePatch);
+
+// ✅ LOGS DÉTAILLÉS pour debugger Android
+app.post('/api/generate-patch', rateLimiter, (req, res, next) => {
+  console.log('🔍 GENERATE-PATCH REQUEST RECEIVED:', {
+    hasLogo: !!req.body.logo,
+    logoLength: req.body.logo?.length || 0,
+    email: req.body.email,
+    backgroundColor: req.body.background_color,
+    borderColor: req.body.border_color,
+    userAgent: req.headers['user-agent'],
+    origin: req.headers.origin,
+  });
+  next();
+}, generatePatch);
 
 // ============================================
 // ROUTES - GALLERY & STATS
