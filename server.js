@@ -86,6 +86,10 @@ const initializeServices = async () => {
 // ============================================
 // ROUTES - HEALTH & MONITORING
 // ============================================
+// Route pour le slideshow (optionnel - retourne tableau vide si pas de patchs)
+app.get('/api/public-patches', async (req, res) => {
+  res.json({ patches: [] });
+});
 
 app.get('/api/health', (req, res) => {
   res.json({
