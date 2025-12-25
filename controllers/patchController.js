@@ -77,16 +77,26 @@ export const generatePatch = async (req, res, next) => {
       .png({ quality: 90 })
       .toBuffer();
 
-    const patchImageUrl = await generatePatchImage(
+    // Génération de l'image du patch avec Gemini
+    const patchImageBase64 = await generatePatchImage(
       optimizedLogoBuffer.toString('base64'),
       background_color,
       border_color
     );
 
-    const generatedImageBuffer = Buffer.from(patchImageUrl, 'base64');
+    // ✅ LOGS DE DEBUG
+    console.log('🔍 Received base64 length:', patchImageBase64.length);
+    console.log('🔍 Starts with:', patchImageBase64.substring(0, 50));
+
+    // Conversion base64 → Buffer
+    const generatedImageBuffer = Buffer.from(patchImageBase64, 'base64');
+    console.log('🔍 Buffer length:', generatedImageBuffer.length, 'bytes');
+
+    // Upload vers GCS
     const gcsFilename = generateFilename(patchId, 'png');
     const publicImageUrl = await uploadToGCS(gcsFilename, generatedImageBuffer, 'image/png');
 
+    // Mise à jour du patch dans MongoDB
     patch.generated_image_url = publicImageUrl;
     patch.generated_image_gcs_path = gcsFilename;
     patch.status = 'generated';
@@ -205,7 +215,7 @@ export const getStats = async (req, res, next) => {
         total_patches: totalPatches,
         generated_patches: generatedPatches,
         sold_patches: soldPatches,
-        total_views: totalViews?.total_views || 0,
+        total_views: totalViews[0]?.total_views || 0,
         timestamp: new Date().toISOString(),
       },
     });
