@@ -76,13 +76,7 @@ export const generatePatchImage = async (logoBase64, backgroundColor, borderColo
 
     const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash-image' });
 
-    const prompt = `
-Front view of a square embroidered fabric patch on a pure white background.
-The patch has thick satin-stitched borders (bourdon stitch) in this color: ${borderColor}.
-The main fabric background of the patch is this color: ${backgroundColor}.
-Inside the square, the input logo is recreated with realistic embroidery thread texture and stitching, not flat print.
-Photorealistic product shot, studio lighting, sharp details, no extra text, no additional graphics, high resolution.
-`;
+    const prompt = `Square embroidered patch, white background. Thick satin borders: ${borderColor}. Fabric background: ${backgroundColor}. Input logo embroidered with thread texture. Product photo, studio lighting.`;
 
     const result = await model.generateContent([
       {
