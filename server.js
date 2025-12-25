@@ -6,6 +6,8 @@ import { initializeGCS } from './config/gcs.js';
 import { initializeGemini } from './config/gemini.js';
 import rateLimiter from './middleware/rateLimiter.js';
 import errorHandler from './middleware/errorHandler.js';
+import { User } from './models/User.js';
+import { getClientIP } from './utils/helpers.js';
 import {
   extractColors,
   generatePatch,
@@ -100,6 +102,76 @@ app.get('/healthz', (req, res) => {
 
 app.get('/ready', (req, res) => {
   res.status(200).json({ ready: true });
+});
+
+// ============================================
+// ROUTES - USER MANAGEMENT
+// ============================================
+
+// Register or get existing user
+app.post('/api/register-user', async (req, res, next) => {
+  try {
+    const { email, first_name, segment, optin_marketing } = req.body;
+
+    if (!email || !email.includes('@')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid email is required',
+      });
+    }
+
+    const clientIP = getClientIP(req);
+
+    // Vérifier si l'utilisateur existe déjà
+    let user = await User.findOne({ email: email.toLowerCase().trim() });
+
+    if (user) {
+      // Utilisateur existant - mettre à jour l'activité
+      user.last_activity = new Date();
+      
+      // Ajouter l'IP si nouvelle
+      if (!user.ip_addresses.includes(clientIP)) {
+        user.ip_addresses.push(clientIP);
+      }
+      
+      await user.save();
+
+      console.log('👤 User found:', user.user_id);
+
+      return res.json({
+        success: true,
+        user_id: user.user_id,
+        email: user.email,
+        existing: true,
+      });
+    }
+
+    // Nouvel utilisateur - créer
+    const userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+
+    user = new User({
+      user_id: userId,
+      email: email.toLowerCase().trim(),
+      first_name: first_name || '',
+      segment: segment || 'supporter',
+      optin_marketing: optin_marketing || false,
+      ip_addresses: [clientIP],
+    });
+
+    await user.save();
+
+    console.log('✨ New user created:', userId);
+
+    res.json({
+      success: true,
+      user_id: userId,
+      email: user.email,
+      existing: false,
+    });
+  } catch (error) {
+    console.error('❌ Register user error:', error.message);
+    next(error);
+  }
 });
 
 // ============================================
