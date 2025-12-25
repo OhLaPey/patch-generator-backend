@@ -129,10 +129,10 @@ Photorealistic product shot, studio lighting, sharp details, no extra text, no a
       throw new Error('Invalid base64 format');
     }
 
-    const dataUrl = `data:image/png;base64,${base64Image}`;
     console.log('✅ Patch image generated successfully');
 
-    return dataUrl;
+    // ✅ Retourner juste le base64 (sans préfixe data:image/png)
+    return base64Image;
   } catch (error) {
     console.error('❌ Patch generation error:', error.message);
     console.error('❌ Error stack:', error.stack);
