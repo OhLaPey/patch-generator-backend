@@ -116,27 +116,29 @@ export const generatePatch = async (req, res, next) => {
     const sizeInKB = logoBuffer.length / 1024;
 
     if (sizeInKB > 1500) {
-      // Fichier lourd (>1.5MB) - compression forte pour Android
+      // Fichier lourd (>1.5MB) - compression forte + résolution réduite pour vitesse
       console.log('🔧 Heavy compression for large file:', sizeInKB.toFixed(0) + 'KB');
       optimizedLogoBuffer = await sharp(logoBuffer)
-        .resize(768, 768, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 80 })
+        .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 75 })
         .toBuffer();
     } else if (sizeInKB > 500) {
-      // Fichier moyen (500KB-1.5MB) - compression légère
-      console.log('🔧 Light compression:', sizeInKB.toFixed(0) + 'KB');
+      // Fichier moyen (500KB-1.5MB) - compression modérée
+      console.log('🔧 Medium compression:', sizeInKB.toFixed(0) + 'KB');
       optimizedLogoBuffer = await sharp(logoBuffer)
-        .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
-        .png({ quality: 85 })
+        .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 80 })
         .toBuffer();
     } else {
-      // Petit fichier (<500KB) - juste redimensionner si trop grand
-      console.log('✅ No compression needed:', sizeInKB.toFixed(0) + 'KB');
+      // Petit fichier (<500KB) - résolution optimale pour vitesse
+      console.log('✅ Light compression:', sizeInKB.toFixed(0) + 'KB');
       optimizedLogoBuffer = await sharp(logoBuffer)
-        .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
-        .png({ quality: 90 })
+        .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
+        .png({ quality: 85 })
         .toBuffer();
     }
+
+    console.log('📦 Optimized size:', (optimizedLogoBuffer.length / 1024).toFixed(0) + 'KB');
 
     // Génération de l'image du patch avec Gemini
     const patchImageBase64 = await generatePatchImage(
