@@ -41,7 +41,45 @@ export const extractColors = async (req, res, next) => {
 
 export const generatePatch = async (req, res, next) => {
   try {
-    const { logo, background_color, border_color, email, source = 'generator-page' } = req.body;
+    // ✅ Support FormData (Android) ET JSON (iPhone/PC)
+    let logo, background_color, border_color, email, source;
+
+    if (req.is('multipart/form-data')) {
+      // Android envoie FormData avec fichier
+      const multer = (await import('multer')).default;
+      const upload = multer({ storage: multer.memoryStorage() });
+      
+      await new Promise((resolve, reject) => {
+        upload.single('logo')(req, res, (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+
+      if (!req.file) {
+        throw new Error('No logo file uploaded');
+      }
+
+      logo = req.file.buffer.toString('base64');
+      background_color = req.body.background_color;
+      border_color = req.body.border_color;
+      email = req.body.email;
+      source = req.body.source || 'generator-page';
+
+      console.log('📱 FormData upload (Android):', {
+        fileSize: req.file.size,
+        email: email,
+      });
+    } else {
+      // iPhone/PC envoient du JSON avec base64
+      logo = req.body.logo;
+      background_color = req.body.background_color;
+      border_color = req.body.border_color;
+      email = req.body.email;
+      source = req.body.source || 'generator-page';
+
+      console.log('💻 JSON upload (iPhone/PC)');
+    }
 
     validateGenerationRequest({ logo, background_color, border_color, email });
 
