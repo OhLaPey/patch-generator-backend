@@ -72,10 +72,10 @@ export const generatePatch = async (req, res, next) => {
       throw new Error('Logo file exceeds 5MB limit');
     }
 
-    const optimizedLogoBuffer = await sharp(logoBuffer)
-      .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
-      .png({ quality: 90 })
-      .toBuffer();
+const optimizedLogoBuffer = await sharp(logoBuffer)
+  .resize(512, 512, { fit: 'inside' }) // ✅ 512 au lieu de 1024
+  .png({ quality: 80 }) // ✅ 80 au lieu de 90
+  .toBuffer();
 
     // Génération de l'image du patch avec Gemini
     const patchImageBase64 = await generatePatchImage(
