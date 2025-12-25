@@ -24,11 +24,11 @@ const app = express();
 
 // CORS
 app.use(cors({
-  origin: (origin, callback) => {
-    const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
-      'https://ppatch.shop',
-      'https://www.ppatch.shop'
-    ];
+  origin: '*',  // ✅ Accepte tous les domaines (temporaire pour tester)
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
     
     // Permettre les requêtes sans origin (Postman, curl) en dev
     if (!origin && process.env.NODE_ENV === 'development') {
