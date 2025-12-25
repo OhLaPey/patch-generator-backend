@@ -22,25 +22,9 @@ const app = express();
 // MIDDLEWARES GLOBAUX
 // ============================================
 
-// CORS
+// ✅ CORS - Accepte tous les domaines
 app.use(cors({
-  origin: '*',  // ✅ Accepte tous les domaines (temporaire pour tester)
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
-    
-    // Permettre les requêtes sans origin (Postman, curl) en dev
-    if (!origin && process.env.NODE_ENV === 'development') {
-      return callback(null, true);
-    }
-    
-    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: '*',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -53,7 +37,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Request logger
 app.use((req, res, next) => {
   const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] ${req.method} ${req.path} - IP: ${req.ip}`);
+  console.log(`[${timestamp}] ${req.method} ${req.path} - Origin: ${req.headers.origin || 'none'}`);
   next();
 });
 
@@ -101,33 +85,19 @@ const initializeServices = async () => {
 // ROUTES - HEALTH & MONITORING
 // ============================================
 
-// Health check endpoint
 app.get('/api/health', (req, res) => {
-  const healthData = {
+  res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     uptime: Math.floor(process.uptime()),
     environment: process.env.NODE_ENV || 'development',
-    services: {
-      mongodb: process.env.SKIP_MONGODB === 'true' ? 'skipped' : 'connected',
-      gcs: 'configured',
-      gemini: 'configured',
-    },
-    memory: {
-      used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB',
-      total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + ' MB',
-    },
-  };
-
-  res.json(healthData);
+  });
 });
 
-// Liveness probe (pour Kubernetes/Cloud Run)
 app.get('/healthz', (req, res) => {
   res.status(200).send('OK');
 });
 
-// Readiness probe
 app.get('/ready', (req, res) => {
   res.status(200).json({ ready: true });
 });
@@ -136,44 +106,26 @@ app.get('/ready', (req, res) => {
 // ROUTES - PATCH GENERATION
 // ============================================
 
-// Extract dominant colors from logo
 app.post('/api/extract-colors', extractColors);
-
-// Generate patch (avec rate limiting)
 app.post('/api/generate-patch', rateLimiter, generatePatch);
 
 // ============================================
 // ROUTES - GALLERY & STATS
 // ============================================
 
-// Get gallery of generated patches
 app.get('/api/gallery', getGallery);
-
-// Get specific patch details
 app.get('/api/patch/:patchId', getPatch);
-
-// Get platform statistics
 app.get('/api/stats', getStats);
 
 // ============================================
-// ROUTES - API INFO & DOCUMENTATION
+// ROUTES - API INFO
 // ============================================
 
-// API info endpoint
 app.get('/api', (req, res) => {
   res.json({
     name: 'PPATCH Backend API',
     version: '1.0.0',
     description: 'Backend for PPATCH embroidered patch generator',
-    endpoints: {
-      health: 'GET /api/health',
-      extractColors: 'POST /api/extract-colors',
-      generatePatch: 'POST /api/generate-patch',
-      gallery: 'GET /api/gallery',
-      patchDetails: 'GET /api/patch/:patchId',
-      stats: 'GET /api/stats',
-    },
-    documentation: 'https://github.com/yourusername/ppatch-backend',
   });
 });
 
@@ -181,25 +133,14 @@ app.get('/api', (req, res) => {
 // ERROR HANDLERS
 // ============================================
 
-// 404 handler (doit être avant errorHandler)
 app.use((req, res) => {
   res.status(404).json({
     success: false,
     error: 'Route not found',
     path: req.path,
-    method: req.method,
-    availableRoutes: [
-      'GET /api/health',
-      'POST /api/extract-colors',
-      'POST /api/generate-patch',
-      'GET /api/gallery',
-      'GET /api/patch/:patchId',
-      'GET /api/stats',
-    ],
   });
 });
 
-// Global error handler (doit être en dernier)
 app.use(errorHandler);
 
 // ============================================
@@ -209,77 +150,27 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 10000;
 const HOST = process.env.HOST || '0.0.0.0';
 
-// Initialize services then start server
 initializeServices().then(() => {
   const server = app.listen(PORT, HOST, () => {
     console.log('\n' + '█'.repeat(60));
-    console.log('🚀 PPATCH Backend Server Started Successfully');
+    console.log('🚀 PPATCH Backend Server Started');
     console.log('█'.repeat(60));
-    console.log(`📡 Server URL: http://${HOST}:${PORT}`);
+    console.log(`📡 URL: http://${HOST}:${PORT}`);
     console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`☁️  GCS Bucket: ${process.env.GOOGLE_CLOUD_STORAGE_BUCKET || 'Not configured'}`);
-    console.log(`🗄️  MongoDB: ${process.env.SKIP_MONGODB === 'true' ? 'Disabled' : 'Enabled'}`);
-    console.log(`🎨 Gemini Model: ${process.env.USE_MOCK_GENERATION === 'true' ? 'Mock Mode' : 'Production'}`);
-    console.log('█'.repeat(60));
-    console.log('\n📋 Available Routes:');
-    console.log('  ├─ GET  /api/health          - Health check');
-    console.log('  ├─ GET  /api                 - API info');
-    console.log('  ├─ POST /api/extract-colors  - Extract colors from logo');
-    console.log('  ├─ POST /api/generate-patch  - Generate embroidered patch');
-    console.log('  ├─ GET  /api/gallery         - Get patches gallery');
-    console.log('  ├─ GET  /api/patch/:id       - Get patch details');
-    console.log('  └─ GET  /api/stats           - Platform statistics');
-    console.log('\n' + '█'.repeat(60));
-    console.log('✨ Server is ready to accept requests!');
+    console.log(`🔓 CORS: OPEN (all origins)`);
     console.log('█'.repeat(60) + '\n');
-
-    // Log configuration warnings
-    if (process.env.USE_MOCK_GENERATION === 'true') {
-      console.warn('⚠️  WARNING: Running in MOCK MODE - Patches will not be generated properly');
-    }
-    if (process.env.SKIP_MONGODB === 'true') {
-      console.warn('⚠️  WARNING: MongoDB is DISABLED - Data will not be persisted');
-    }
-    if (!process.env.GOOGLE_API_KEY) {
-      console.error('❌ ERROR: GOOGLE_API_KEY is not set!');
-    }
-    if (!process.env.GOOGLE_CLOUD_STORAGE_BUCKET) {
-      console.error('❌ ERROR: GOOGLE_CLOUD_STORAGE_BUCKET is not set!');
-    }
   });
 
-  // ============================================
-  // GRACEFUL SHUTDOWN
-  // ============================================
-
   const gracefulShutdown = (signal) => {
-    console.log(`\n🛑 ${signal} received, shutting down gracefully...`);
-    
+    console.log(`\n🛑 ${signal} received, shutting down...`);
     server.close(() => {
-      console.log('✅ HTTP server closed');
-      console.log('👋 Goodbye!');
+      console.log('✅ Server closed');
       process.exit(0);
     });
-
-    // Force shutdown after 30 seconds
-    setTimeout(() => {
-      console.error('⚠️  Forced shutdown after timeout');
-      process.exit(1);
-    }, 30000);
   };
 
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-  process.on('uncaughtException', (error) => {
-    console.error('💥 Uncaught Exception:', error);
-    gracefulShutdown('UNCAUGHT_EXCEPTION');
-  });
-
-  process.on('unhandledRejection', (reason, promise) => {
-    console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
-    gracefulShutdown('UNHANDLED_REJECTION');
-  });
 }).catch((error) => {
   console.error('❌ Failed to start server:', error);
   process.exit(1);
