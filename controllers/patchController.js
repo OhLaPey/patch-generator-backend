@@ -73,10 +73,32 @@ export const generatePatch = async (req, res, next) => {
       throw new Error('Logo file exceeds 5MB limit');
     }
 
-    const optimizedLogoBuffer = await sharp(logoBuffer)
-      .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
-      .png({ quality: 90 })
-      .toBuffer();
+    // ✅ Compression adaptative selon la taille
+    let optimizedLogoBuffer;
+    const sizeInKB = logoBuffer.length / 1024;
+
+    if (sizeInKB > 1500) {
+      // Fichier lourd (>1.5MB) - compression forte pour Android
+      console.log('🔧 Heavy compression for large file:', sizeInKB.toFixed(0) + 'KB');
+      optimizedLogoBuffer = await sharp(logoBuffer)
+        .resize(768, 768, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 80 })
+        .toBuffer();
+    } else if (sizeInKB > 500) {
+      // Fichier moyen (500KB-1.5MB) - compression légère
+      console.log('🔧 Light compression:', sizeInKB.toFixed(0) + 'KB');
+      optimizedLogoBuffer = await sharp(logoBuffer)
+        .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+        .png({ quality: 85 })
+        .toBuffer();
+    } else {
+      // Petit fichier (<500KB) - juste redimensionner si trop grand
+      console.log('✅ No compression needed:', sizeInKB.toFixed(0) + 'KB');
+      optimizedLogoBuffer = await sharp(logoBuffer)
+        .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+        .png({ quality: 90 })
+        .toBuffer();
+    }
 
     // Génération de l'image du patch avec Gemini
     const patchImageBase64 = await generatePatchImage(
