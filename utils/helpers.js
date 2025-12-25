@@ -10,12 +10,16 @@ export const generateFilename = (patchId, format = 'png') => {
 };
 
 export const getClientIP = (req) => {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) {
+    return forwarded.split(',')[0].trim(); // ✅ Prendre la première IP seulement
+  }
   return (
-    req.headers['x-forwarded-for']?.split(',') ||
     req.headers['x-real-ip'] ||
     req.connection.remoteAddress ||
     req.socket.remoteAddress ||
-    req.ip
+    req.ip ||
+    'unknown'
   );
 };
 
