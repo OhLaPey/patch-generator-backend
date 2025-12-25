@@ -8,10 +8,10 @@ let client;
 export const initializeGemini = () => {
   try {
     client = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-    console.log('Gemini API initialized');
+    console.log('✅ Gemini API initialized');
     return client;
   } catch (error) {
-    console.error('Gemini init error:', error.message);
+    console.error('❌ Gemini init error:', error.message);
     throw error;
   }
 };
@@ -39,7 +39,7 @@ export const extractDominantColors = async (imageBase64) => {
     ]);
 
     let responseText = response.response.text().trim();
-    console.log('Raw response:', responseText);
+    console.log('📊 Raw response:', responseText);
 
     const jsonMatch = responseText.match(/\[[\s\S]*\]/);
     if (!jsonMatch) {
@@ -47,23 +47,32 @@ export const extractDominantColors = async (imageBase64) => {
     }
 
     const colors = JSON.parse(jsonMatch[0]);
-    console.log('Colors extracted:', colors);
+    console.log('🎨 Colors extracted:', colors);
 
     return {
       background_options: colors.slice(0, 3),
       border_options: colors.slice(2, 5),
     };
   } catch (error) {
-    console.error('Color extraction error:', error.message);
+    console.error('❌ Color extraction error:', error.message);
     throw new Error('Failed to extract colors: ' + error.message);
   }
 };
 
 export const generatePatchImage = async (logoBase64, backgroundColor, borderColor) => {
   try {
+    // MODE MOCK pour tests
+    if (process.env.USE_MOCK_GENERATION === 'true') {
+      console.log('⚠️  MOCK MODE: Returning original logo as base64');
+      return `data:image/png;base64,${logoBase64}`;
+    }
+
     if (!client) {
       initializeGemini();
     }
+
+    console.log('🎨 Generating patch with:', { backgroundColor, borderColor });
+    console.log('📏 Input logo size:', logoBase64.length, 'chars');
 
     const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash-image' });
 
@@ -85,21 +94,48 @@ Photorealistic product shot, studio lighting, sharp details, no extra text, no a
       prompt,
     ]);
 
-    const imagePart = result.response.candidates[0].content.parts.find(
-      (p) => p.inlineData
-    );
+    console.log('🔍 Gemini response received');
+    console.log('🔍 Response structure:', JSON.stringify(result.response, null, 2).substring(0, 500));
+
+    // Vérifier la structure de la réponse
+    if (!result.response || !result.response.candidates || !result.response.candidates[0]) {
+      console.error('❌ Invalid response structure:', result.response);
+      throw new Error('Invalid response structure from Gemini');
+    }
+
+    const candidate = result.response.candidates[0];
+    console.log('🔍 Candidate content:', JSON.stringify(candidate.content, null, 2).substring(0, 500));
+
+    const imagePart = candidate.content.parts.find((p) => p.inlineData);
 
     if (!imagePart || !imagePart.inlineData || !imagePart.inlineData.data) {
+      console.error('❌ No image data in response');
+      console.error('Parts:', JSON.stringify(candidate.content.parts, null, 2));
       throw new Error('No image data returned by Gemini');
     }
 
     const base64Image = imagePart.inlineData.data;
-    const dataUrl = `data:image/png;base64,${base64Image}`;
+    console.log('📏 Generated image size:', base64Image.length, 'chars');
+    console.log('🔍 Image data starts with:', base64Image.substring(0, 50));
 
-    console.log('Patch image generated');
+    // Vérifier que c'est bien du base64 valide
+    if (base64Image.length < 100) {
+      throw new Error('Generated image data too short: ' + base64Image.length);
+    }
+
+    // Vérifier le format
+    const base64Regex = /^[A-Za-z0-9+/=]+$/;
+    if (!base64Regex.test(base64Image.substring(0, 100))) {
+      throw new Error('Invalid base64 format');
+    }
+
+    const dataUrl = `data:image/png;base64,${base64Image}`;
+    console.log('✅ Patch image generated successfully');
+
     return dataUrl;
   } catch (error) {
-    console.error('Patch generation error:', error.message);
+    console.error('❌ Patch generation error:', error.message);
+    console.error('❌ Error stack:', error.stack);
     throw new Error('Failed to generate patch: ' + error.message);
   }
 };
