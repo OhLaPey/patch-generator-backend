@@ -40,14 +40,12 @@ export const uploadToGCS = async (filename, buffer, contentType = 'image/png') =
   try {
     const file = bucket.file(filename);
     
-    // ✅ CORRIGÉ: Upload avec public: true au lieu de makePublic()
+    // ✅ CORRIGÉ: Upload simple sans ACL (le bucket est déjà public)
     await file.save(buffer, {
       metadata: {
         contentType: contentType,
         cacheControl: 'public, max-age=86400', // 24h cache
       },
-      public: true, // ✅ Rend le fichier public directement sans getIamPolicy
-      predefinedAcl: 'publicRead', // ✅ ACL publique
     });
 
     // Get public URL (pas besoin de makePublic)
