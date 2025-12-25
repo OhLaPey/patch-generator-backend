@@ -1,4 +1,5 @@
 import { Patch } from '../config/mongodb.js';
+import { User } from '../models/User.js';
 import { uploadToGCS } from '../config/gcs.js';
 import { generatePatchImage, extractDominantColors } from '../config/gemini.js';
 import { 
@@ -72,10 +73,10 @@ export const generatePatch = async (req, res, next) => {
       throw new Error('Logo file exceeds 5MB limit');
     }
 
-const optimizedLogoBuffer = await sharp(logoBuffer)
-  .resize(512, 512, { fit: 'inside' }) // ✅ 512 au lieu de 1024
-  .png({ quality: 80 }) // ✅ 80 au lieu de 90
-  .toBuffer();
+    const optimizedLogoBuffer = await sharp(logoBuffer)
+      .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+      .png({ quality: 90 })
+      .toBuffer();
 
     // Génération de l'image du patch avec Gemini
     const patchImageBase64 = await generatePatchImage(
@@ -101,6 +102,19 @@ const optimizedLogoBuffer = await sharp(logoBuffer)
     patch.generated_image_gcs_path = gcsFilename;
     patch.status = 'generated';
     await patch.save();
+
+    // ✅ Incrémenter le compteur de patchs pour l'utilisateur
+    try {
+      await User.updateOne(
+        { email: sanitizeEmail(email) },
+        { 
+          $inc: { patches_generated: 1 },
+          $set: { last_activity: new Date() }
+        }
+      );
+    } catch (userError) {
+      console.warn('⚠️  Could not update user patch count:', userError.message);
+    }
 
     logActivity('Patch Generation Success', { patchId, imageUrl: publicImageUrl });
 
