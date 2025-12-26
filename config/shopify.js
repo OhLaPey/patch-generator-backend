@@ -5,19 +5,24 @@ let shopify = null;
 
 export const initializeShopify = () => {
   try {
+    console.log('🔍 Checking Shopify credentials...');
+    console.log('SHOPIFY_SHOP_NAME:', process.env.SHOPIFY_SHOP_NAME);
+    console.log('SHOPIFY_ACCESS_TOKEN:', process.env.SHOPIFY_ACCESS_TOKEN ? '✅ Present' : '❌ Missing');
+    
     if (!process.env.SHOPIFY_SHOP_NAME || !process.env.SHOPIFY_ACCESS_TOKEN) {
       console.warn('⚠️  Shopify credentials missing - Product creation disabled');
       return;
     }
 
     shopify = shopifyApi({
-      apiKey: 'not-needed-for-custom-app',
-      apiSecretKey: 'not-needed-for-custom-app',
+      apiKey: process.env.SHOPIFY_API_KEY || 'not-needed',
+      apiSecretKey: process.env.SHOPIFY_API_SECRET || 'not-needed',
       scopes: ['write_products', 'read_products'],
       hostName: process.env.SHOPIFY_SHOP_NAME.replace('https://', '').replace('http://', ''),
       apiVersion: LATEST_API_VERSION,
       isEmbeddedApp: false,
       isCustomStoreApp: true,
+      adminApiAccessToken: process.env.SHOPIFY_ACCESS_TOKEN, // ← Ajout de cette ligne
     });
 
     console.log('✅ Shopify API initialized');
