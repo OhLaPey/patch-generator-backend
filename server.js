@@ -86,10 +86,6 @@ const initializeServices = async () => {
 // ============================================
 // ROUTES - HEALTH & MONITORING
 // ============================================
-// Route pour le slideshow (optionnel - retourne tableau vide si pas de patchs)
-app.get('/api/public-patches', async (req, res) => {
-  res.json({ patches: [] });
-});
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -205,6 +201,11 @@ app.post('/api/generate-patch', rateLimiter, (req, res, next) => {
 app.get('/api/gallery', getGallery);
 app.get('/api/patch/:patchId', getPatch);
 app.get('/api/stats', getStats);
+
+// ============================================
+// ROUTE PUBLIQUE: PATCHS POUR SLIDESHOW
+// ============================================
+
 app.get('/api/public-patches', async (req, res, next) => {
   try {
     const { Patch } = await import('./config/mongodb.js');
@@ -218,6 +219,8 @@ app.get('/api/public-patches', async (req, res, next) => {
       .limit(10)
       .select('patch_id image_url created_at background_color border_color')
       .lean();
+    
+    console.log(`📸 Slideshow: ${patches.length} patchs publics trouvés`);
     
     res.json({
       success: true,
