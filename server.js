@@ -299,7 +299,7 @@ app.post('/api/create-shopify-product', async (req, res, next) => {
     patch.shopify_product_id = shopifyProduct.id;
     patch.shopify_product_url = shopifyProduct.url;
     patch.shopify_product_handle = shopifyProduct.handle;
-    patch.status = 'available_for_purchase';
+    // Le statut reste 'generated' (pas de statut 'available_for_purchase' dans le schéma)
     await patch.save();
 
     console.log(`✅ Shopify product created and linked to patch ${patch_id}`);
