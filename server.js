@@ -205,6 +205,31 @@ app.post('/api/generate-patch', rateLimiter, (req, res, next) => {
 app.get('/api/gallery', getGallery);
 app.get('/api/patch/:patchId', getPatch);
 app.get('/api/stats', getStats);
+app.get('/api/public-patches', async (req, res, next) => {
+  try {
+    const { Patch } = await import('./config/mongodb.js');
+    
+    // Récupérer les 10 derniers patchs générés avec succès
+    const patches = await Patch.find({ 
+      status: 'generated',
+      image_url: { $exists: true, $ne: null }
+    })
+      .sort({ created_at: -1 }) // Plus récents en premier
+      .limit(10)
+      .select('patch_id image_url created_at background_color border_color')
+      .lean();
+    
+    res.json({
+      success: true,
+      patches: patches,
+      count: patches.length
+    });
+    
+  } catch (error) {
+    console.error('Error fetching public patches:', error);
+    next(error);
+  }
+});
 
 // ============================================
 // ROUTES - API INFO
