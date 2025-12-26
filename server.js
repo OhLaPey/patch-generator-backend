@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { connectDB } from './config/mongodb.js';
 import { initializeGCS } from './config/gcs.js';
 import { initializeGemini } from './config/gemini.js';
+import { initializeShopify, createShopifyProduct } from './config/shopify.js';
 import rateLimiter from './middleware/rateLimiter.js';
 import errorHandler from './middleware/errorHandler.js';
 import { User } from './models/User.js';
@@ -65,6 +66,9 @@ const initializeServices = async () => {
 
     // 3. Gemini API
     initializeGemini();
+
+    // 4. Shopify API
+    initializeShopify();
 
     console.log('='.repeat(60));
     console.log('✅ All services initialized successfully');
@@ -213,9 +217,9 @@ app.get('/api/public-patches', async (req, res, next) => {
     // Récupérer les 10 derniers patchs générés avec succès
     const patches = await Patch.find({ 
       status: 'generated',
-      generated_image_url: { $exists: true, $ne: null }  // ✅ FIXED: generated_image_url au lieu de image_url
+      generated_image_url: { $exists: true, $ne: null }
     })
-      .sort({ created_at: -1 }) // Plus récents en premier
+      .sort({ created_at: -1 })
       .limit(10)
       .select('patch_id generated_image_url created_at background_color border_color')
       .lean();
@@ -223,7 +227,7 @@ app.get('/api/public-patches', async (req, res, next) => {
     // Renommer generated_image_url → image_url pour le frontend
     const formattedPatches = patches.map(p => ({
       patch_id: p.patch_id,
-      image_url: p.generated_image_url,  // ✅ Conversion pour le frontend
+      image_url: p.generated_image_url,
       created_at: p.created_at,
       background_color: p.background_color,
       border_color: p.border_color
@@ -239,6 +243,77 @@ app.get('/api/public-patches', async (req, res, next) => {
     
   } catch (error) {
     console.error('Error fetching public patches:', error);
+    next(error);
+  }
+});
+
+// ============================================
+// ROUTE: CRÉATION PRODUIT SHOPIFY
+// ============================================
+
+app.post('/api/create-shopify-product', async (req, res, next) => {
+  try {
+    const { patch_id } = req.body;
+
+    if (!patch_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'patch_id is required'
+      });
+    }
+
+    // Récupérer le patch depuis MongoDB
+    const { Patch } = await import('./config/mongodb.js');
+    const patch = await Patch.findOne({ patch_id });
+
+    if (!patch) {
+      return res.status(404).json({
+        success: false,
+        error: 'Patch not found'
+      });
+    }
+
+    // Vérifier si le produit Shopify existe déjà
+    if (patch.shopify_product_url) {
+      console.log(`ℹ️  Shopify product already exists for ${patch_id}`);
+      return res.json({
+        success: true,
+        url: patch.shopify_product_url,
+        product_id: patch.shopify_product_id,
+        already_exists: true
+      });
+    }
+
+    // Créer le produit Shopify
+    console.log(`🛍️  Creating Shopify product for patch ${patch_id}...`);
+
+    const shopifyProduct = await createShopifyProduct({
+      patch_id: patch.patch_id,
+      image_url: patch.generated_image_url,
+      background_color: patch.background_color,
+      border_color: patch.border_color,
+      email: patch.email
+    });
+
+    // Mettre à jour le patch dans MongoDB
+    patch.shopify_product_id = shopifyProduct.id;
+    patch.shopify_product_url = shopifyProduct.url;
+    patch.shopify_product_handle = shopifyProduct.handle;
+    patch.status = 'available_for_purchase';
+    await patch.save();
+
+    console.log(`✅ Shopify product created and linked to patch ${patch_id}`);
+
+    res.json({
+      success: true,
+      url: shopifyProduct.url,
+      product_id: shopifyProduct.id,
+      admin_url: shopifyProduct.admin_url,
+      already_exists: false
+    });
+
+  } catch (error) {
+    console.error('❌ Create Shopify product error:', error);
     next(error);
   }
 });
