@@ -213,19 +213,28 @@ app.get('/api/public-patches', async (req, res, next) => {
     // Récupérer les 10 derniers patchs générés avec succès
     const patches = await Patch.find({ 
       status: 'generated',
-      image_url: { $exists: true, $ne: null }
+      generated_image_url: { $exists: true, $ne: null }  // ✅ FIXED: generated_image_url au lieu de image_url
     })
       .sort({ created_at: -1 }) // Plus récents en premier
       .limit(10)
-      .select('patch_id image_url created_at background_color border_color')
+      .select('patch_id generated_image_url created_at background_color border_color')
       .lean();
     
-    console.log(`📸 Slideshow: ${patches.length} patchs publics trouvés`);
+    // Renommer generated_image_url → image_url pour le frontend
+    const formattedPatches = patches.map(p => ({
+      patch_id: p.patch_id,
+      image_url: p.generated_image_url,  // ✅ Conversion pour le frontend
+      created_at: p.created_at,
+      background_color: p.background_color,
+      border_color: p.border_color
+    }));
+    
+    console.log(`📸 Slideshow: ${formattedPatches.length} patchs publics trouvés`);
     
     res.json({
       success: true,
-      patches: patches,
-      count: patches.length
+      patches: formattedPatches,
+      count: formattedPatches.length
     });
     
   } catch (error) {
