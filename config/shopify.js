@@ -48,10 +48,8 @@ export const createShopifyProduct = async (patchData) => {
   } = patchData;
 
   try {
-    const session = {
-      shop: process.env.SHOPIFY_SHOP_NAME,
-      accessToken: process.env.SHOPIFY_ACCESS_TOKEN,
-    };
+    const session = shopify.session.customAppSession(process.env.SHOPIFY_SHOP_NAME);
+    session.accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
 
     const client = new shopify.clients.Rest({ session });
 
@@ -156,10 +154,8 @@ export const getShopifyProduct = async (productId) => {
   }
 
   try {
-    const session = {
-      shop: process.env.SHOPIFY_SHOP_NAME,
-      accessToken: process.env.SHOPIFY_ACCESS_TOKEN,
-    };
+    const session = shopify.session.customAppSession(process.env.SHOPIFY_SHOP_NAME);
+    session.accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
 
     const client = new shopify.clients.Rest({ session });
 
