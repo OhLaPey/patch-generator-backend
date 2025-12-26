@@ -51,7 +51,14 @@ export const createShopifyProduct = async (patchData) => {
     const session = shopify.session.customAppSession(process.env.SHOPIFY_SHOP_NAME);
     session.accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
 
+    console.log('🔍 Session créée:', {
+      shop: session.shop,
+      hasToken: !!session.accessToken
+    });
+
     const client = new shopify.clients.Rest({ session });
+
+    console.log('🔍 Calling Shopify API:', `https://${session.shop}/admin/api/${LATEST_API_VERSION}/products.json`);
 
     // Créer le produit
     const response = await client.post({
