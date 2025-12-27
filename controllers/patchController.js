@@ -111,6 +111,23 @@ export const generatePatch = async (req, res, next) => {
       throw new Error('Logo file exceeds 5MB limit');
     }
 
+    // ✅ NOUVEAU: Sauvegarder le logo original sur GCS
+    console.log('📤 Sauvegarde du logo original sur GCS...');
+    const originalLogoFilename = `logos/original_${patchId}_${Date.now()}.png`;
+    
+    // Convertir en PNG propre avant upload
+    const originalLogoPng = await sharp(logoBuffer)
+      .png()
+      .toBuffer();
+    
+    const originalLogoUrl = await uploadToGCS(originalLogoFilename, originalLogoPng, 'image/png');
+    console.log('✅ Logo original sauvegardé:', originalLogoUrl);
+
+    // Mettre à jour le patch avec l'URL du logo original
+    patch.original_logo_url = originalLogoUrl;
+    patch.original_logo_gcs_path = originalLogoFilename;
+    await patch.save();
+
     // ✅ Compression adaptative selon la taille
     let optimizedLogoBuffer;
     const sizeInKB = logoBuffer.length / 1024;
