@@ -59,7 +59,47 @@ export const extractDominantColors = async (imageBase64) => {
   }
 };
 
-export const generatePatchImage = async (logoBase64, backgroundColor, borderColor) => {
+/**
+ * Générer le prompt selon la forme sélectionnée
+ * @param {string} shape - Forme du patch
+ * @param {string} backgroundColor - Couleur de fond
+ * @param {string} borderColor - Couleur de bordure
+ * @returns {string} - Prompt pour Gemini
+ */
+const getShapePrompt = (shape, backgroundColor, borderColor) => {
+  const shapeDescriptions = {
+    'square': {
+      shape: 'Square',
+      description: 'square shaped embroidered patch with equal sides'
+    },
+    'logo_shape': {
+      shape: 'Custom contour',
+      description: 'embroidered patch that follows the exact contour/outline shape of the input logo, cut precisely around the logo edges'
+    },
+    'circle': {
+      shape: 'Circular/Round',
+      description: 'perfectly round circular embroidered patch'
+    },
+    'rectangle_h': {
+      shape: 'Horizontal rectangle',
+      description: 'horizontal rectangular embroidered patch, wider than tall (landscape orientation)'
+    },
+    'rectangle_v': {
+      shape: 'Vertical rectangle',
+      description: 'vertical rectangular embroidered patch, taller than wide (portrait orientation)'
+    },
+    'shield': {
+      shape: 'Shield/Crest',
+      description: 'traditional shield/crest/blazon shaped embroidered patch, like a classic sports team badge'
+    }
+  };
+
+  const shapeInfo = shapeDescriptions[shape] || shapeDescriptions['square'];
+
+  return `${shapeInfo.shape} embroidered patch. Create a ${shapeInfo.description}. White background. Thick satin stitch borders in ${borderColor}. Fabric background fill in ${backgroundColor}. The input logo should be embroidered with realistic thread texture and stitching details. Product photography style, studio lighting, high quality render.`;
+};
+
+export const generatePatchImage = async (logoBase64, backgroundColor, borderColor, shape = 'square') => {
   try {
     // MODE MOCK pour tests
     if (process.env.USE_MOCK_GENERATION === 'true') {
@@ -71,12 +111,14 @@ export const generatePatchImage = async (logoBase64, backgroundColor, borderColo
       initializeGemini();
     }
 
-    console.log('🎨 Generating patch with:', { backgroundColor, borderColor });
+    console.log('🎨 Generating patch with:', { backgroundColor, borderColor, shape });
     console.log('📏 Input logo size:', logoBase64.length, 'chars');
 
     const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash-image' });
 
-    const prompt = `Square embroidered patch, white background. Thick satin borders: ${borderColor}. Fabric background: ${backgroundColor}. Input logo embroidered with thread texture. Product photo, studio lighting.`;
+    // Générer le prompt selon la forme
+    const prompt = getShapePrompt(shape, backgroundColor, borderColor);
+    console.log('📝 Prompt:', prompt);
 
     const result = await model.generateContent([
       {
