@@ -28,11 +28,13 @@ const patchSchema = new mongoose.Schema(
     ip_address: String,
     user_agent: String,
     
-    // Original uploaded data
+    // Original uploaded logo
     original_logo_filename: String,
     original_logo_size: Number,
+    original_logo_url: String,
+    original_logo_gcs_path: String,
     
-    // Generated patch data
+    // Generated patch data (rendu final)
     generated_image_url: String,
     generated_image_gcs_path: String,
     
