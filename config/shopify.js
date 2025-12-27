@@ -22,13 +22,164 @@ export const initializeShopify = () => {
       apiVersion: LATEST_API_VERSION,
       isEmbeddedApp: false,
       isCustomStoreApp: true,
-      adminApiAccessToken: process.env.SHOPIFY_ACCESS_TOKEN, // ← Ajout de cette ligne
+      adminApiAccessToken: process.env.SHOPIFY_ACCESS_TOKEN,
     });
 
     console.log('✅ Shopify API initialized');
   } catch (error) {
     console.error('❌ Shopify initialization failed:', error.message);
   }
+};
+
+/**
+ * Convertir un code hex en nom de couleur approximatif
+ */
+const getColorName = (hex) => {
+  const colors = {
+    '#FFFFFF': 'Blanc',
+    '#F5F5F5': 'Blanc cassé',
+    '#E0E0E0': 'Gris clair',
+    '#BDBDBD': 'Gris',
+    '#9E9E9E': 'Gris moyen',
+    '#757575': 'Gris foncé',
+    '#424242': 'Anthracite',
+    '#212121': 'Noir profond',
+    '#000000': 'Noir',
+    '#FF0000': 'Rouge vif',
+    '#E91E63': 'Rose',
+    '#9C27B0': 'Violet',
+    '#673AB7': 'Violet foncé',
+    '#3F51B5': 'Indigo',
+    '#2196F3': 'Bleu',
+    '#03A9F4': 'Bleu ciel',
+    '#00BCD4': 'Cyan',
+    '#009688': 'Turquoise',
+    '#4CAF50': 'Vert',
+    '#8BC34A': 'Vert clair',
+    '#CDDC39': 'Lime',
+    '#FFEB3B': 'Jaune',
+    '#FFC107': 'Ambre',
+    '#FF9800': 'Orange',
+    '#FF5722': 'Orange foncé',
+    '#795548': 'Marron',
+    '#C41E3A': 'Rouge cardinal',
+    '#1E40AF': 'Bleu marine',
+    '#00A859': 'Vert émeraude',
+  };
+  
+  const upperHex = hex.toUpperCase();
+  return colors[upperHex] || 'Personnalisée';
+};
+
+/**
+ * Obtenir le nom de la forme en français
+ */
+const getShapeName = (shape) => {
+  const shapes = {
+    'square': 'Carré',
+    'logo_shape': 'Forme du logo',
+    'circle': 'Rond',
+    'rectangle_h': 'Rectangle horizontal',
+    'rectangle_v': 'Rectangle vertical',
+    'shield': 'Écusson',
+  };
+  return shapes[shape] || 'Carré';
+};
+
+/**
+ * Générer la description HTML SEO optimisée
+ */
+const generateProductDescription = (patchData) => {
+  const {
+    background_color,
+    border_color,
+    shape,
+    size,
+    club_name
+  } = patchData;
+
+  const bgColorName = getColorName(background_color);
+  const borderColorName = getColorName(border_color);
+  const shapeName = getShapeName(shape);
+  const displayName = club_name || 'votre design';
+
+  return `
+<div class="ppatch-product-description">
+  <h2>🧵 Patch Brodé Personnalisé de Haute Qualité</h2>
+  
+  <p>Transformez ${club_name ? `le logo de <strong>${club_name}</strong>` : 'votre logo'} en un magnifique <strong>écusson brodé professionnel</strong>. Chaque patch est fabriqué avec soin en France, avec des matériaux premium pour une durabilité exceptionnelle.</p>
+
+  <h3>✨ Caractéristiques de votre patch</h3>
+  
+  <div class="ppatch-specs">
+    <div class="ppatch-spec-item">
+      <span class="ppatch-spec-label">📐 Dimensions</span>
+      <span class="ppatch-spec-value"><strong>${size} cm</strong> (plus grande dimension)</span>
+    </div>
+    
+    <div class="ppatch-spec-item">
+      <span class="ppatch-spec-label">🔷 Forme</span>
+      <span class="ppatch-spec-value">${shapeName}</span>
+    </div>
+    
+    <div class="ppatch-spec-item">
+      <span class="ppatch-spec-label">🎨 Couleur de fond</span>
+      <span class="ppatch-spec-value">
+        <span class="ppatch-color-dot" style="background-color: ${background_color}; display: inline-block; width: 16px; height: 16px; border-radius: 50%; border: 1px solid #ddd; vertical-align: middle; margin-right: 6px;"></span>
+        ${bgColorName}
+      </span>
+    </div>
+    
+    <div class="ppatch-spec-item">
+      <span class="ppatch-spec-label">🔲 Couleur de bordure</span>
+      <span class="ppatch-spec-value">
+        <span class="ppatch-color-dot" style="background-color: ${border_color}; display: inline-block; width: 16px; height: 16px; border-radius: 50%; border: 1px solid #ddd; vertical-align: middle; margin-right: 6px;"></span>
+        ${borderColorName}
+      </span>
+    </div>
+  </div>
+
+  <h3>🏆 Qualité Premium</h3>
+  <ul>
+    <li>✅ <strong>Broderie haute définition</strong> — Fil polyester résistant aux UV et lavages</li>
+    <li>✅ <strong>Bordure métalock renforcée</strong> — Finition professionnelle durable</li>
+    <li>✅ <strong>Velcro premium au dos</strong> — Système d'attache repositionnable</li>
+    <li>✅ <strong>Fabrication française</strong> — Qualité artisanale garantie</li>
+  </ul>
+
+  <h3>🎯 Idéal pour</h3>
+  <ul>
+    <li>👕 Personnaliser vos vêtements (vestes, casquettes, sacs)</li>
+    <li>⚽ Équiper votre club ou équipe sportive</li>
+    <li>🎁 Offrir un cadeau unique et personnalisé</li>
+    <li>🏢 Créer des objets promotionnels pour votre entreprise</li>
+  </ul>
+
+  <h3>📦 Livraison & Délais</h3>
+  <p>Votre patch personnalisé est fabriqué à la commande. Comptez <strong>5 à 7 jours ouvrés</strong> pour la fabrication, puis expédition sous 24-48h.</p>
+
+  <h3>💡 Compatible PPATCH</h3>
+  <p>Ce patch est compatible avec tous nos accessoires de la gamme PPATCH : casquettes, brassards, porte-clés et plus encore !</p>
+
+  <hr style="margin: 24px 0; border: none; border-top: 1px solid #eee;">
+  
+  <p style="font-size: 12px; color: #888;">
+    ⚠️ <em>Note : L'image présentée est une simulation générée par IA. Le produit final brodé peut présenter de légères variations. Vous êtes responsable d'obtenir les autorisations nécessaires pour l'utilisation de logos ou marques protégés.</em>
+  </p>
+</div>
+
+<style>
+  .ppatch-product-description h2 { font-size: 1.4em; margin-bottom: 16px; }
+  .ppatch-product-description h3 { font-size: 1.1em; margin: 24px 0 12px; color: #333; }
+  .ppatch-product-description ul { padding-left: 0; list-style: none; }
+  .ppatch-product-description li { margin: 8px 0; line-height: 1.6; }
+  .ppatch-specs { background: #f9f9f9; padding: 16px; border-radius: 8px; margin: 16px 0; }
+  .ppatch-spec-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+  .ppatch-spec-item:last-child { border-bottom: none; }
+  .ppatch-spec-label { font-weight: 500; color: #666; }
+  .ppatch-spec-value { font-weight: 600; color: #333; }
+</style>
+`;
 };
 
 /**
@@ -44,8 +195,32 @@ export const createShopifyProduct = async (patchData) => {
     image_url,
     background_color,
     border_color,
+    shape,
+    size,
+    club_name,
     email
   } = patchData;
+
+  // Générer le titre du produit
+  const productTitle = club_name 
+    ? `Patch Brodé ${club_name}`
+    : 'Patch Brodé Personnalisé';
+
+  // Générer les tags SEO
+  const tags = [
+    'patch brodé',
+    'écusson personnalisé',
+    'broderie',
+    'patch velcro',
+    'fabrication française',
+    getShapeName(shape).toLowerCase(),
+    `${size}cm`,
+    patch_id
+  ];
+  
+  if (club_name) {
+    tags.push(club_name.toLowerCase());
+  }
 
   try {
     const session = shopify.session.customAppSession(process.env.SHOPIFY_SHOP_NAME);
@@ -65,35 +240,32 @@ export const createShopifyProduct = async (patchData) => {
       path: 'products',
       data: {
         product: {
-          title: `Patch Brodé Personnalisé - ${patch_id.substring(0, 8)}`,
-          body_html: `
-            <p><strong>Patch brodé personnalisé de haute qualité</strong></p>
-            <ul>
-              <li>✅ Broderie fil polyester haute résistance</li>
-              <li>✅ Bordure métalock renforcée</li>
-              <li>✅ Velcro au dos (système d'attache)</li>
-              <li>✅ Dimensions: 10cm de diamètre</li>
-              <li>✅ Fabriqué en France</li>
-            </ul>
-            <p><em>Couleur de fond: ${background_color}</em><br>
-            <em>Couleur de bordure: ${border_color}</em></p>
-            <p><small>Référence: ${patch_id}</small></p>
-          `,
+          title: productTitle,
+          body_html: generateProductDescription(patchData),
           vendor: 'PPATCH',
           product_type: 'Patch Brodé',
-          tags: ['personnalisé', 'patch', 'broderie', patch_id],
+          tags: tags.join(', '),
           images: [
             {
               src: image_url,
-              alt: 'Aperçu du patch brodé personnalisé'
+              alt: `${productTitle} - Patch brodé personnalisé ${size}cm`
             }
           ],
           variants: [
             {
               price: process.env.PATCH_PRICE || '29.90',
               sku: patch_id,
-              inventory_management: null, // Pas de gestion de stock
-              inventory_policy: 'continue', // Autoriser la vente même si stock = 0
+              inventory_management: null,
+              inventory_policy: 'continue',
+              option1: `${size} cm`,
+              weight: 20,
+              weight_unit: 'g'
+            }
+          ],
+          options: [
+            {
+              name: 'Taille',
+              values: [`${size} cm`]
             }
           ],
           metafields: [
@@ -119,6 +291,24 @@ export const createShopifyProduct = async (patchData) => {
               namespace: 'ppatch',
               key: 'border_color',
               value: border_color,
+              type: 'single_line_text_field'
+            },
+            {
+              namespace: 'ppatch',
+              key: 'shape',
+              value: shape,
+              type: 'single_line_text_field'
+            },
+            {
+              namespace: 'ppatch',
+              key: 'size',
+              value: size.toString(),
+              type: 'single_line_text_field'
+            },
+            {
+              namespace: 'ppatch',
+              key: 'club_name',
+              value: club_name || '',
               type: 'single_line_text_field'
             }
           ]
