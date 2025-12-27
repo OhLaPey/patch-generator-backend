@@ -54,10 +54,34 @@ const patchSchema = new mongoose.Schema(
       }
     ],
     
-    // Shopify integration
+    // Shopify Product
     shopify_product_id: String,
     shopify_variant_id: String,
     shopify_product_url: String,
+    shopify_product_handle: String,
+    
+    // Shopify Order (après achat)
+    shopify_order_id: {
+      type: String,
+      index: true,
+    },
+    shopify_order_number: String,
+    purchase_date: Date,
+    
+    // Vectorisation
+    vectorized: {
+      type: Boolean,
+      default: false,
+    },
+    vectorized_at: Date,
+    vectorized_svg_url: String,
+    
+    // Email notification
+    email_sent: {
+      type: Boolean,
+      default: false,
+    },
+    email_sent_at: Date,
     
     // Status
     status: {
