@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { connectDB } from './config/mongodb.js';
 import { initializeGCS } from './config/gcs.js';
-import { initializeGemini } from './config/gemini.js';
+import { initializeGemini, detectLogoName } from './config/gemini.js';
 import { initializeShopify, createShopifyProduct } from './config/shopify.js';
 import { initializeEmailService } from './services/emailService.js';
 import rateLimiter from './middleware/rateLimiter.js';
@@ -188,6 +188,44 @@ app.post('/api/register-user', async (req, res, next) => {
 // ============================================
 
 app.post('/api/extract-colors', extractColors);
+
+// ============================================
+// ROUTE: DÉTECTION NOM DU LOGO
+// ============================================
+
+app.post('/api/detect-logo-name', async (req, res, next) => {
+  try {
+    const { logo } = req.body;
+
+    if (!logo) {
+      return res.status(400).json({
+        success: false,
+        error: 'Logo image is required'
+      });
+    }
+
+    console.log('🔍 Detecting logo name...');
+    
+    const result = await detectLogoName(logo);
+    
+    console.log('🏷️ Detection result:', result);
+
+    res.json({
+      success: true,
+      name: result.name,
+      confidence: result.confidence
+    });
+
+  } catch (error) {
+    console.error('❌ Logo name detection error:', error.message);
+    // Ne pas faire échouer, retourner vide
+    res.json({
+      success: true,
+      name: '',
+      confidence: 'none'
+    });
+  }
+});
 
 // ✅ LOGS DÉTAILLÉS pour debugger Android
 app.post('/api/generate-patch', rateLimiter, (req, res, next) => {
