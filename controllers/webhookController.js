@@ -128,7 +128,8 @@ export const handleOrderPaid = async (req, res) => {
 
     console.log('📋 Patch trouvé:', {
       patch_id: patch.patch_id,
-      image_url: patch.generated_image_url,
+      original_logo_url: patch.original_logo_url,
+      generated_image_url: patch.generated_image_url,
       background_color: patch.background_color
     });
 
@@ -141,32 +142,49 @@ export const handleOrderPaid = async (req, res) => {
 
     console.log('✅ Patch marqué comme acheté');
 
-    // 5. Télécharger l'image originale depuis GCS
-    console.log('📥 Téléchargement de l\'image...');
-    let imageBuffer;
-    try {
-      imageBuffer = await downloadImage(patch.generated_image_url);
-      console.log(`✅ Image téléchargée: ${(imageBuffer.length / 1024).toFixed(1)} KB`);
-    } catch (downloadError) {
-      console.error('❌ Erreur téléchargement image:', downloadError.message);
-      // Continuer quand même, on enverra l'email sans l'image originale
+    // 5. Télécharger le logo ORIGINAL pour vectorisation
+    let originalLogoBuffer = null;
+    if (patch.original_logo_url) {
+      console.log('📥 Téléchargement du logo original...');
+      try {
+        originalLogoBuffer = await downloadImage(patch.original_logo_url);
+        console.log(`✅ Logo original téléchargé: ${(originalLogoBuffer.length / 1024).toFixed(1)} KB`);
+      } catch (downloadError) {
+        console.error('❌ Erreur téléchargement logo original:', downloadError.message);
+      }
+    } else {
+      console.warn('⚠️  Pas de logo original stocké pour ce patch');
     }
 
-    // 6. Vectoriser l'image
-    console.log('🔄 Vectorisation en cours...');
-    let svgResult;
-    try {
-      svgResult = await vectorizeImage(imageBuffer, {
-        maxColors: 12,
-        tolerance: 45
-      });
-      console.log(`✅ Vectorisation terminée: ${svgResult.layerCount} calques`);
-    } catch (vectorError) {
-      console.error('❌ Erreur vectorisation:', vectorError.message);
-      // On peut quand même envoyer l'email avec juste l'image originale
+    // 6. Télécharger l'image du PATCH FINAL pour l'email
+    let patchImageBuffer = null;
+    if (patch.generated_image_url) {
+      console.log('📥 Téléchargement du rendu patch final...');
+      try {
+        patchImageBuffer = await downloadImage(patch.generated_image_url);
+        console.log(`✅ Patch final téléchargé: ${(patchImageBuffer.length / 1024).toFixed(1)} KB`);
+      } catch (downloadError) {
+        console.error('❌ Erreur téléchargement patch final:', downloadError.message);
+      }
     }
 
-    // 7. Préparer les données pour l'email
+    // 7. Vectoriser le LOGO ORIGINAL
+    let svgResult = null;
+    if (originalLogoBuffer) {
+      console.log('🔄 Vectorisation du logo original...');
+      try {
+        svgResult = await vectorizeImage(originalLogoBuffer, {
+          levels: 4
+        });
+        console.log(`✅ Vectorisation terminée: ${svgResult.layerCount} niveaux`);
+      } catch (vectorError) {
+        console.error('❌ Erreur vectorisation:', vectorError.message);
+      }
+    } else {
+      console.warn('⚠️  Impossible de vectoriser - logo original non disponible');
+    }
+
+    // 8. Préparer les données pour l'email
     const shippingAddress = orderData.shipping_address || orderData.billing_address;
     
     const emailOrderData = {
@@ -186,12 +204,13 @@ export const handleOrderPaid = async (req, res) => {
       totalPrice: orderData.total_price
     };
 
+    // Email contient: le PATCH FINAL (image) + le LOGO VECTORISÉ (SVG)
     const emailFiles = {
-      originalImage: imageBuffer || null,
-      svgFile: svgResult?.svg ? Buffer.from(svgResult.svg, 'utf-8') : null
+      originalImage: patchImageBuffer,  // Le rendu du patch final
+      svgFile: svgResult?.svg ? Buffer.from(svgResult.svg, 'utf-8') : null  // Le logo vectorisé
     };
 
-    // 8. Envoyer l'email
+    // 9. Envoyer l'email
     console.log('📧 Envoi de l\'email...');
     try {
       await sendPatchEmail(emailOrderData, emailFiles);
@@ -201,7 +220,7 @@ export const handleOrderPaid = async (req, res) => {
       // Log mais ne pas faire échouer le webhook
     }
 
-    // 9. Mettre à jour le patch avec le statut de vectorisation
+    // 10. Mettre à jour le patch avec le statut de vectorisation
     patch.vectorized = !!svgResult;
     patch.vectorized_at = svgResult ? new Date() : null;
     patch.email_sent = true;
