@@ -49,6 +49,11 @@ const patchSchema = new mongoose.Schema(
       required: true,
       match: /^#[0-9A-F]{6}$/i,
     },
+    shape: {
+      type: String,
+      enum: ['square', 'logo_shape', 'circle', 'rectangle_h', 'rectangle_v', 'shield'],
+      default: 'square',
+    },
     dominant_colors: [
       {
         type: String,
