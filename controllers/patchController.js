@@ -45,6 +45,8 @@ export const generatePatch = async (req, res, next) => {
     let logo, background_color, border_color, email, source;
 
     let shape;
+    let size;
+    let club_name;
 
     if (req.is('multipart/form-data')) {
       // Android envoie FormData avec fichier
@@ -67,12 +69,16 @@ export const generatePatch = async (req, res, next) => {
       border_color = req.body.border_color;
       email = req.body.email;
       shape = req.body.shape || 'square';
+      size = parseFloat(req.body.size) || 6.5;
+      club_name = req.body.club_name || '';
       source = req.body.source || 'generator-page';
 
       console.log('📱 FormData upload (Android):', {
         fileSize: req.file.size,
         email: email,
         shape: shape,
+        size: size,
+        club_name: club_name,
       });
     } else {
       // iPhone/PC envoient du JSON avec base64
@@ -81,9 +87,11 @@ export const generatePatch = async (req, res, next) => {
       border_color = req.body.border_color;
       email = req.body.email;
       shape = req.body.shape || 'square';
+      size = parseFloat(req.body.size) || 6.5;
+      club_name = req.body.club_name || '';
       source = req.body.source || 'generator-page';
 
-      console.log('💻 JSON upload (iPhone/PC)', { shape: shape });
+      console.log('💻 JSON upload (iPhone/PC)', { shape: shape, size: size, club_name: club_name });
     }
 
     validateGenerationRequest({ logo, background_color, border_color, email });
@@ -105,6 +113,8 @@ export const generatePatch = async (req, res, next) => {
       background_color,
       border_color,
       shape,
+      size,
+      club_name,
       source,
       status: 'processing',
     });
@@ -211,6 +221,8 @@ export const generatePatch = async (req, res, next) => {
       background_color,
       border_color,
       shape,
+      size,
+      club_name,
       created_at: patch.created_at,
     });
   } catch (error) {
