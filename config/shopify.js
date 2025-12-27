@@ -262,7 +262,7 @@ export const createShopifyProduct = async (patchData) => {
           variants: [
             {
               title: '5 cm',
-              price: process.env.PATCH_PRICE_5CM || '24.90',
+              price: '10.00',
               sku: `${patch_id}_5cm`,
               inventory_management: null,
               inventory_policy: 'continue',
@@ -272,7 +272,7 @@ export const createShopifyProduct = async (patchData) => {
             },
             {
               title: '6.5 cm ⭐',
-              price: process.env.PATCH_PRICE_6CM || '29.90',
+              price: '10.00',
               sku: `${patch_id}_6.5cm`,
               inventory_management: null,
               inventory_policy: 'continue',
@@ -282,7 +282,7 @@ export const createShopifyProduct = async (patchData) => {
             },
             {
               title: '8 cm',
-              price: process.env.PATCH_PRICE_8CM || '34.90',
+              price: '10.00',
               sku: `${patch_id}_8cm`,
               inventory_management: null,
               inventory_policy: 'continue',
@@ -292,7 +292,7 @@ export const createShopifyProduct = async (patchData) => {
             },
             {
               title: '10 cm',
-              price: process.env.PATCH_PRICE_10CM || '39.90',
+              price: '10.00',
               sku: `${patch_id}_10cm`,
               inventory_management: null,
               inventory_policy: 'continue',
