@@ -5,10 +5,12 @@ import { connectDB } from './config/mongodb.js';
 import { initializeGCS } from './config/gcs.js';
 import { initializeGemini } from './config/gemini.js';
 import { initializeShopify, createShopifyProduct } from './config/shopify.js';
+import { initializeEmailService } from './services/emailService.js';
 import rateLimiter from './middleware/rateLimiter.js';
 import errorHandler from './middleware/errorHandler.js';
 import { User } from './models/User.js';
 import { getClientIP } from './utils/helpers.js';
+import webhookRoutes from './routes/webhooks.js';
 import {
   extractColors,
   generatePatch,
@@ -69,6 +71,9 @@ const initializeServices = async () => {
 
     // 4. Shopify API
     initializeShopify();
+
+    // 5. Email Service (Gmail)
+    initializeEmailService();
 
     console.log('='.repeat(60));
     console.log('✅ All services initialized successfully');
@@ -317,6 +322,12 @@ app.post('/api/create-shopify-product', async (req, res, next) => {
     next(error);
   }
 });
+
+// ============================================
+// ROUTES - WEBHOOKS SHOPIFY
+// ============================================
+
+app.use('/api/webhooks', webhookRoutes);
 
 // ============================================
 // ROUTES - API INFO
