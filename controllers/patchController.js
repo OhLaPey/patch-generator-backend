@@ -44,6 +44,8 @@ export const generatePatch = async (req, res, next) => {
     // ✅ Support FormData (Android) ET JSON (iPhone/PC)
     let logo, background_color, border_color, email, source;
 
+    let shape;
+
     if (req.is('multipart/form-data')) {
       // Android envoie FormData avec fichier
       const multer = (await import('multer')).default;
@@ -64,11 +66,13 @@ export const generatePatch = async (req, res, next) => {
       background_color = req.body.background_color;
       border_color = req.body.border_color;
       email = req.body.email;
+      shape = req.body.shape || 'square';
       source = req.body.source || 'generator-page';
 
       console.log('📱 FormData upload (Android):', {
         fileSize: req.file.size,
         email: email,
+        shape: shape,
       });
     } else {
       // iPhone/PC envoient du JSON avec base64
@@ -76,9 +80,10 @@ export const generatePatch = async (req, res, next) => {
       background_color = req.body.background_color;
       border_color = req.body.border_color;
       email = req.body.email;
+      shape = req.body.shape || 'square';
       source = req.body.source || 'generator-page';
 
-      console.log('💻 JSON upload (iPhone/PC)');
+      console.log('💻 JSON upload (iPhone/PC)', { shape: shape });
     }
 
     validateGenerationRequest({ logo, background_color, border_color, email });
@@ -99,6 +104,7 @@ export const generatePatch = async (req, res, next) => {
       user_agent: req.headers['user-agent'],
       background_color,
       border_color,
+      shape,
       source,
       status: 'processing',
     });
@@ -161,7 +167,8 @@ export const generatePatch = async (req, res, next) => {
     const patchImageBase64 = await generatePatchImage(
       optimizedLogoBuffer.toString('base64'),
       background_color,
-      border_color
+      border_color,
+      shape
     );
 
     // ✅ LOGS DE DEBUG
@@ -203,6 +210,7 @@ export const generatePatch = async (req, res, next) => {
       image_url: publicImageUrl,
       background_color,
       border_color,
+      shape,
       created_at: patch.created_at,
     });
   } catch (error) {
