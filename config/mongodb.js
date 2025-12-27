@@ -54,6 +54,17 @@ const patchSchema = new mongoose.Schema(
       enum: ['square', 'logo_shape', 'circle', 'rectangle_h', 'rectangle_v', 'shield'],
       default: 'square',
     },
+    size: {
+      type: Number,
+      min: 5,
+      max: 10,
+      default: 6.5,
+    },
+    club_name: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     dominant_colors: [
       {
         type: String,
