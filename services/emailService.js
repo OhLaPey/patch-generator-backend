@@ -1,27 +1,21 @@
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
-let transporter = null;
+let resend = null;
 
 /**
- * Initialiser le transporteur email (Gmail)
+ * Initialiser le service email (Resend)
  */
 export const initializeEmailService = () => {
   try {
-    if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-      console.warn('⚠️  Gmail credentials missing - Email notifications disabled');
-      console.warn('   Set GMAIL_USER and GMAIL_APP_PASSWORD in .env');
+    if (!process.env.RESEND_API_KEY) {
+      console.warn('⚠️  Resend API key missing - Email notifications disabled');
+      console.warn('   Set RESEND_API_KEY in .env');
       return false;
     }
 
-    transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_APP_PASSWORD,
-      },
-    });
+    resend = new Resend(process.env.RESEND_API_KEY);
 
-    console.log('✅ Email service initialized (Gmail)');
+    console.log('✅ Email service initialized (Resend)');
     return true;
   } catch (error) {
     console.error('❌ Email service initialization failed:', error.message);
@@ -33,8 +27,8 @@ export const initializeEmailService = () => {
  * Envoyer un email avec les fichiers du patch
  */
 export const sendPatchEmail = async (orderData, files) => {
-  if (!transporter) {
-    console.error('❌ Email transporter not initialized');
+  if (!resend) {
+    console.error('❌ Resend not initialized');
     throw new Error('Email service not configured');
   }
 
@@ -120,34 +114,38 @@ export const sendPatchEmail = async (orderData, files) => {
 </html>
 `;
 
-  const mailOptions = {
-    from: `"PPATCH Broderie" <${process.env.GMAIL_USER}>`,
-    to: process.env.NOTIFICATION_EMAIL || 'contact@ppatch.shop',
-    subject: `🧵 Commande #${orderNumber} - Patch ${patchId.substring(0, 8)} à broder`,
-    html: emailHtml,
-    attachments: []
-  };
+  const attachments = [];
 
   if (originalImage) {
-    mailOptions.attachments.push({
+    attachments.push({
       filename: `patch_${patchId}_original.png`,
-      content: originalImage,
-      contentType: 'image/png'
+      content: originalImage.toString('base64'),
     });
   }
 
   if (svgFile) {
-    mailOptions.attachments.push({
+    attachments.push({
       filename: `patch_${patchId}_vectorise.svg`,
-      content: svgFile,
-      contentType: 'image/svg+xml'
+      content: svgFile.toString('base64'),
     });
   }
 
   try {
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Email envoyé pour commande #${orderNumber}:`, info.messageId);
-    return { success: true, messageId: info.messageId };
+    const { data, error } = await resend.emails.send({
+      from: 'PPATCH Broderie <onboarding@resend.dev>',
+      to: [process.env.NOTIFICATION_EMAIL || 'contact@ppatch.shop'],
+      subject: `🧵 Commande #${orderNumber} - Patch ${patchId.substring(0, 8)} à broder`,
+      html: emailHtml,
+      attachments: attachments
+    });
+
+    if (error) {
+      console.error('❌ Resend error:', error);
+      throw new Error(error.message);
+    }
+
+    console.log(`✅ Email envoyé pour commande #${orderNumber}:`, data.id);
+    return { success: true, messageId: data.id };
   } catch (error) {
     console.error('❌ Erreur envoi email:', error);
     throw error;
@@ -158,23 +156,31 @@ export const sendPatchEmail = async (orderData, files) => {
  * Envoyer un email de test
  */
 export const sendTestEmail = async () => {
-  if (!transporter) {
+  if (!resend) {
     throw new Error('Email service not configured');
   }
 
-  const mailOptions = {
-    from: `"PPATCH Test" <${process.env.GMAIL_USER}>`,
-    to: process.env.NOTIFICATION_EMAIL || 'contact@ppatch.shop',
-    subject: '✅ Test email PPATCH - Configuration OK',
-    html: `
-      <h1>🎉 Configuration email réussie!</h1>
-      <p>Le service d'email PPATCH fonctionne correctement.</p>
-      <p>Vous recevrez les commandes à cette adresse.</p>
-      <p><small>Envoyé le ${new Date().toLocaleString('fr-FR')}</small></p>
-    `
-  };
+  try {
+    const { data, error } = await resend.emails.send({
+      from: 'PPATCH Test <onboarding@resend.dev>',
+      to: [process.env.NOTIFICATION_EMAIL || 'contact@ppatch.shop'],
+      subject: '✅ Test email PPATCH - Configuration OK',
+      html: `
+        <h1>🎉 Configuration email réussie!</h1>
+        <p>Le service d'email PPATCH fonctionne correctement.</p>
+        <p>Vous recevrez les commandes à cette adresse.</p>
+        <p><small>Envoyé le ${new Date().toLocaleString('fr-FR')}</small></p>
+      `
+    });
 
-  const info = await transporter.sendMail(mailOptions);
-  console.log('✅ Test email sent:', info.messageId);
-  return info;
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    console.log('✅ Test email sent:', data.id);
+    return data;
+  } catch (error) {
+    console.error('❌ Test email error:', error);
+    throw error;
+  }
 };
