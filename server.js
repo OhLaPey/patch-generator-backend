@@ -329,12 +329,20 @@ app.post('/api/create-shopify-product', async (req, res, next) => {
 
     // Créer le produit Shopify
     console.log(`🛍️  Creating Shopify product for patch ${patch_id}...`);
+    console.log(`📋 Patch data:`, {
+      club_name: patch.club_name,
+      shape: patch.shape,
+      background_color: patch.background_color,
+      border_color: patch.border_color
+    });
 
     const shopifyProduct = await createShopifyProduct({
       patch_id: patch.patch_id,
       image_url: patch.generated_image_url,
       background_color: patch.background_color,
       border_color: patch.border_color,
+      shape: patch.shape,
+      club_name: patch.club_name,
       email: patch.email
     });
 
