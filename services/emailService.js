@@ -1,178 +1,180 @@
-import '@shopify/shopify-api/adapters/node';
-import { shopifyApi, LATEST_API_VERSION } from '@shopify/shopify-api';
+import nodemailer from 'nodemailer';
 
-let shopify = null;
+let transporter = null;
 
-export const initializeShopify = () => {
+/**
+ * Initialiser le transporteur email (Gmail)
+ */
+export const initializeEmailService = () => {
   try {
-    console.log('🔍 Checking Shopify credentials...');
-    console.log('SHOPIFY_SHOP_NAME:', process.env.SHOPIFY_SHOP_NAME);
-    console.log('SHOPIFY_ACCESS_TOKEN:', process.env.SHOPIFY_ACCESS_TOKEN ? '✅ Present' : '❌ Missing');
-    
-    if (!process.env.SHOPIFY_SHOP_NAME || !process.env.SHOPIFY_ACCESS_TOKEN) {
-      console.warn('⚠️  Shopify credentials missing - Product creation disabled');
-      return;
+    if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+      console.warn('⚠️  Gmail credentials missing - Email notifications disabled');
+      console.warn('   Set GMAIL_USER and GMAIL_APP_PASSWORD in .env');
+      return false;
     }
 
-    shopify = shopifyApi({
-      apiKey: process.env.SHOPIFY_API_KEY || 'not-needed',
-      apiSecretKey: process.env.SHOPIFY_API_SECRET || 'not-needed',
-      scopes: ['write_products', 'read_products'],
-      hostName: process.env.SHOPIFY_SHOP_NAME.replace('https://', '').replace('http://', ''),
-      apiVersion: LATEST_API_VERSION,
-      isEmbeddedApp: false,
-      isCustomStoreApp: true,
-      adminApiAccessToken: process.env.SHOPIFY_ACCESS_TOKEN, // ← Ajout de cette ligne
+    transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASSWORD,
+      },
     });
 
-    console.log('✅ Shopify API initialized');
+    console.log('✅ Email service initialized (Gmail)');
+    return true;
   } catch (error) {
-    console.error('❌ Shopify initialization failed:', error.message);
+    console.error('❌ Email service initialization failed:', error.message);
+    return false;
   }
 };
 
 /**
- * Créer un produit Shopify pour un patch
+ * Envoyer un email avec les fichiers du patch
  */
-export const createShopifyProduct = async (patchData) => {
-  if (!shopify) {
-    throw new Error('Shopify not initialized');
+export const sendPatchEmail = async (orderData, files) => {
+  if (!transporter) {
+    console.error('❌ Email transporter not initialized');
+    throw new Error('Email service not configured');
   }
 
   const {
-    patch_id,
-    image_url,
-    background_color,
-    border_color,
-    email
-  } = patchData;
+    orderNumber,
+    customerName,
+    customerEmail,
+    shippingAddress,
+    patchId,
+    orderDate,
+    totalPrice
+  } = orderData;
+
+  const { originalImage, svgFile } = files;
+
+  const addressLines = shippingAddress ? [
+    shippingAddress.name,
+    shippingAddress.address1,
+    shippingAddress.address2,
+    `${shippingAddress.zip} ${shippingAddress.city}`,
+    shippingAddress.country
+  ].filter(Boolean).join('\n') : 'Non renseignée';
+
+  const emailHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: #2c3e50; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+    .content { background: #f9f9f9; padding: 20px; border: 1px solid #ddd; }
+    .info-box { background: white; padding: 15px; margin: 10px 0; border-radius: 4px; border-left: 4px solid #3498db; }
+    .label { font-weight: bold; color: #555; }
+    .value { margin-left: 10px; }
+    .footer { text-align: center; padding: 15px; color: #777; font-size: 12px; }
+    .badge { display: inline-block; background: #27ae60; color: white; padding: 5px 10px; border-radius: 4px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🧵 Nouvelle commande PPATCH</h1>
+      <span class="badge">Prêt à broder</span>
+    </div>
+    
+    <div class="content">
+      <div class="info-box">
+        <h3>📦 Commande #${orderNumber}</h3>
+        <p><span class="label">Date:</span> <span class="value">${new Date(orderDate).toLocaleString('fr-FR')}</span></p>
+        <p><span class="label">Montant:</span> <span class="value">${totalPrice} €</span></p>
+        <p><span class="label">Patch ID:</span> <span class="value">${patchId}</span></p>
+      </div>
+      
+      <div class="info-box">
+        <h3>👤 Client</h3>
+        <p><span class="label">Nom:</span> <span class="value">${customerName}</span></p>
+        <p><span class="label">Email:</span> <span class="value">${customerEmail}</span></p>
+      </div>
+      
+      <div class="info-box">
+        <h3>📍 Adresse de livraison</h3>
+        <pre style="margin: 0; font-family: Arial;">${addressLines}</pre>
+      </div>
+      
+      <div class="info-box">
+        <h3>📎 Fichiers joints</h3>
+        <ul>
+          <li><strong>Image originale</strong> - Pour référence visuelle</li>
+          <li><strong>SVG vectorisé</strong> - Prêt pour import dans PE-Design</li>
+        </ul>
+        <p style="color: #666; font-size: 12px;">
+          💡 Le SVG contient des calques séparés par couleur pour faciliter la digitisation.
+        </p>
+      </div>
+    </div>
+    
+    <div class="footer">
+      <p>Email généré automatiquement par PPATCH Backend</p>
+    </div>
+  </div>
+</body>
+</html>
+`;
+
+  const mailOptions = {
+    from: `"PPATCH Broderie" <${process.env.GMAIL_USER}>`,
+    to: process.env.NOTIFICATION_EMAIL || 'contact@ppatch.shop',
+    subject: `🧵 Commande #${orderNumber} - Patch ${patchId.substring(0, 8)} à broder`,
+    html: emailHtml,
+    attachments: []
+  };
+
+  if (originalImage) {
+    mailOptions.attachments.push({
+      filename: `patch_${patchId}_original.png`,
+      content: originalImage,
+      contentType: 'image/png'
+    });
+  }
+
+  if (svgFile) {
+    mailOptions.attachments.push({
+      filename: `patch_${patchId}_vectorise.svg`,
+      content: svgFile,
+      contentType: 'image/svg+xml'
+    });
+  }
 
   try {
-    const session = shopify.session.customAppSession(process.env.SHOPIFY_SHOP_NAME);
-    session.accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
-
-    console.log('🔍 Session créée:', {
-      shop: session.shop,
-      hasToken: !!session.accessToken
-    });
-
-    const client = new shopify.clients.Rest({ session });
-
-    console.log('🔍 Calling Shopify API:', `https://${session.shop}/admin/api/${LATEST_API_VERSION}/products.json`);
-
-    // Créer le produit
-    const response = await client.post({
-      path: 'products',
-      data: {
-        product: {
-          title: `Patch Brodé Personnalisé - ${patch_id.substring(0, 8)}`,
-          body_html: `
-            <p><strong>Patch brodé personnalisé de haute qualité</strong></p>
-            <ul>
-              <li>✅ Broderie fil polyester haute résistance</li>
-              <li>✅ Bordure métalock renforcée</li>
-              <li>✅ Velcro au dos (système d'attache)</li>
-              <li>✅ Dimensions: 10cm de diamètre</li>
-              <li>✅ Fabriqué en France</li>
-            </ul>
-            <p><em>Couleur de fond: ${background_color}</em><br>
-            <em>Couleur de bordure: ${border_color}</em></p>
-            <p><small>Référence: ${patch_id}</small></p>
-          `,
-          vendor: 'PPATCH',
-          product_type: 'Patch Brodé',
-          tags: ['personnalisé', 'patch', 'broderie', patch_id],
-          images: [
-            {
-              src: image_url,
-              alt: 'Aperçu du patch brodé personnalisé'
-            }
-          ],
-          variants: [
-            {
-              price: process.env.PATCH_PRICE || '29.90',
-              sku: patch_id,
-              inventory_management: null, // Pas de gestion de stock
-              inventory_policy: 'continue', // Autoriser la vente même si stock = 0
-            }
-          ],
-          metafields: [
-            {
-              namespace: 'ppatch',
-              key: 'patch_id',
-              value: patch_id,
-              type: 'single_line_text_field'
-            },
-            {
-              namespace: 'ppatch',
-              key: 'customer_email',
-              value: email,
-              type: 'single_line_text_field'
-            },
-            {
-              namespace: 'ppatch',
-              key: 'background_color',
-              value: background_color,
-              type: 'single_line_text_field'
-            },
-            {
-              namespace: 'ppatch',
-              key: 'border_color',
-              value: border_color,
-              type: 'single_line_text_field'
-            }
-          ]
-        }
-      }
-    });
-
-    const product = response.body.product;
-
-    console.log(`✅ Shopify product created: ${product.id}`);
-
-    // Construire l'URL du produit
-    const shopName = process.env.SHOPIFY_SHOP_NAME.replace('.myshopify.com', '');
-    const productUrl = `https://${shopName}.myshopify.com/products/${product.handle}`;
-
-    return {
-      id: product.id.toString(),
-      url: productUrl,
-      handle: product.handle,
-      admin_url: `https://${process.env.SHOPIFY_SHOP_NAME}/admin/products/${product.id}`
-    };
-
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`✅ Email envoyé pour commande #${orderNumber}:`, info.messageId);
+    return { success: true, messageId: info.messageId };
   } catch (error) {
-    console.error('❌ Shopify product creation failed:', error.message);
-    
-    if (error.response) {
-      console.error('Shopify API Error:', error.response.body);
-    }
-    
-    throw new Error(`Failed to create Shopify product: ${error.message}`);
+    console.error('❌ Erreur envoi email:', error);
+    throw error;
   }
 };
 
 /**
- * Vérifier si un produit existe déjà
+ * Envoyer un email de test
  */
-export const getShopifyProduct = async (productId) => {
-  if (!shopify) {
-    throw new Error('Shopify not initialized');
+export const sendTestEmail = async () => {
+  if (!transporter) {
+    throw new Error('Email service not configured');
   }
 
-  try {
-    const session = shopify.session.customAppSession(process.env.SHOPIFY_SHOP_NAME);
-    session.accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+  const mailOptions = {
+    from: `"PPATCH Test" <${process.env.GMAIL_USER}>`,
+    to: process.env.NOTIFICATION_EMAIL || 'contact@ppatch.shop',
+    subject: '✅ Test email PPATCH - Configuration OK',
+    html: `
+      <h1>🎉 Configuration email réussie!</h1>
+      <p>Le service d'email PPATCH fonctionne correctement.</p>
+      <p>Vous recevrez les commandes à cette adresse.</p>
+      <p><small>Envoyé le ${new Date().toLocaleString('fr-FR')}</small></p>
+    `
+  };
 
-    const client = new shopify.clients.Rest({ session });
-
-    const response = await client.get({
-      path: `products/${productId}`,
-    });
-
-    return response.body.product;
-  } catch (error) {
-    console.error('Failed to get Shopify product:', error.message);
-    return null;
-  }
+  const info = await transporter.sendMail(mailOptions);
+  console.log('✅ Test email sent:', info.messageId);
+  return info;
 };
