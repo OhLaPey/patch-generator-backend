@@ -60,6 +60,77 @@ export const extractDominantColors = async (imageBase64) => {
 };
 
 /**
+ * Détecter le nom du club/équipe/marque à partir d'un logo
+ * @param {string} imageBase64 - Image en base64
+ * @returns {Promise<{name: string, confidence: string}>}
+ */
+export const detectLogoName = async (imageBase64) => {
+  try {
+    if (!client) {
+      initializeGemini();
+    }
+
+    const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
+
+    const prompt = `Analyze this logo image and try to identify the organization name (sports club, team, company, association, etc.).
+
+Look for:
+- Text written on the logo
+- Known sports club emblems (football, rugby, basketball, etc.)
+- Brand or company logos
+- Association or organization symbols
+
+Return ONLY a JSON object with this exact format:
+{
+  "name": "Detected Name Here",
+  "confidence": "high" | "medium" | "low" | "none"
+}
+
+Rules:
+- If you can clearly read text or recognize the organization, confidence is "high"
+- If you can partially read or make an educated guess, confidence is "medium"  
+- If you're unsure but have a guess, confidence is "low"
+- If you cannot identify any name, return {"name": "", "confidence": "none"}
+- Return the name in its original language (French club names stay French)
+- Don't add generic words like "FC", "Club", "Team" if they're not in the original
+- Keep the name concise (e.g., "US Valcourt" not "Union Sportive de Valcourt Football Club")`;
+
+    const response = await model.generateContent([
+      {
+        inlineData: {
+          data: imageBase64,
+          mimeType: 'image/png',
+        },
+      },
+      prompt,
+    ]);
+
+    let responseText = response.response.text().trim();
+    console.log('🔍 Logo detection raw response:', responseText);
+
+    // Extraire le JSON de la réponse
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.warn('⚠️ No JSON found in logo detection response');
+      return { name: '', confidence: 'none' };
+    }
+
+    const result = JSON.parse(jsonMatch[0]);
+    console.log('🏷️ Logo name detected:', result);
+
+    return {
+      name: result.name || '',
+      confidence: result.confidence || 'none'
+    };
+
+  } catch (error) {
+    console.error('❌ Logo name detection error:', error.message);
+    // Ne pas faire échouer le flow, retourner vide
+    return { name: '', confidence: 'none' };
+  }
+};
+
+/**
  * Générer le prompt selon la forme sélectionnée
  * @param {string} shape - Forme du patch
  * @param {string} backgroundColor - Couleur de fond
