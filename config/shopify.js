@@ -91,17 +91,15 @@ const getShapeName = (shape) => {
  */
 const generateProductDescription = (patchData) => {
   const {
-    background_color,
-    border_color,
-    shape,
-    size,
-    club_name
+    background_color = '#FFFFFF',
+    border_color = '#000000',
+    shape = 'square',
+    club_name = ''
   } = patchData;
 
   const bgColorName = getColorName(background_color);
   const borderColorName = getColorName(border_color);
   const shapeName = getShapeName(shape);
-  const displayName = club_name || 'votre design';
 
   return `
 <div class="ppatch-product-description">
@@ -114,7 +112,7 @@ const generateProductDescription = (patchData) => {
   <div class="ppatch-specs">
     <div class="ppatch-spec-item">
       <span class="ppatch-spec-label">📐 Dimensions</span>
-      <span class="ppatch-spec-value"><strong>${size} cm</strong> (plus grande dimension)</span>
+      <span class="ppatch-spec-value"><strong>Choisissez ci-dessus</strong> (5 à 10 cm)</span>
     </div>
     
     <div class="ppatch-spec-item">
@@ -138,6 +136,14 @@ const generateProductDescription = (patchData) => {
       </span>
     </div>
   </div>
+
+  <h3>📏 Guide des tailles</h3>
+  <ul>
+    <li>🔸 <strong>5 cm</strong> — Compact, idéal pour petits espaces (⚠️ détails fins limités)</li>
+    <li>⭐ <strong>6.5 cm</strong> — Format standard, compatible supports PPATCH</li>
+    <li>🔹 <strong>8 cm</strong> — Grand format, parfait pour les logos détaillés</li>
+    <li>🔷 <strong>10 cm</strong> — Très grand, maximum de détails visibles</li>
+  </ul>
 
   <h3>🏆 Qualité Premium</h3>
   <ul>
@@ -193,13 +199,16 @@ export const createShopifyProduct = async (patchData) => {
   const {
     patch_id,
     image_url,
-    background_color,
-    border_color,
-    shape,
-    size,
-    club_name,
-    email
+    background_color = '#FFFFFF',
+    border_color = '#000000',
+    shape = 'square',
+    size = 6.5,
+    club_name = '',
+    email = ''
   } = patchData;
+
+  // S'assurer que size est un nombre valide
+  const sizeNum = parseFloat(size) || 6.5;
 
   // Générer le titre du produit
   const productTitle = club_name 
@@ -214,7 +223,6 @@ export const createShopifyProduct = async (patchData) => {
     'patch velcro',
     'fabrication française',
     getShapeName(shape).toLowerCase(),
-    `${size}cm`,
     patch_id
   ];
   
@@ -235,7 +243,7 @@ export const createShopifyProduct = async (patchData) => {
 
     console.log('🔍 Calling Shopify API:', `https://${session.shop}/admin/api/${LATEST_API_VERSION}/products.json`);
 
-    // Créer le produit
+    // Créer le produit avec variantes de taille
     const response = await client.post({
       path: 'products',
       data: {
@@ -248,24 +256,55 @@ export const createShopifyProduct = async (patchData) => {
           images: [
             {
               src: image_url,
-              alt: `${productTitle} - Patch brodé personnalisé ${size}cm`
+              alt: `${productTitle} - Patch brodé personnalisé`
             }
           ],
           variants: [
             {
-              price: process.env.PATCH_PRICE || '29.90',
-              sku: patch_id,
+              title: '5 cm',
+              price: process.env.PATCH_PRICE_5CM || '24.90',
+              sku: `${patch_id}_5cm`,
               inventory_management: null,
               inventory_policy: 'continue',
-              option1: `${size} cm`,
+              option1: '5 cm ⚠️',
+              weight: 15,
+              weight_unit: 'g'
+            },
+            {
+              title: '6.5 cm ⭐',
+              price: process.env.PATCH_PRICE_6CM || '29.90',
+              sku: `${patch_id}_6.5cm`,
+              inventory_management: null,
+              inventory_policy: 'continue',
+              option1: '6.5 cm ⭐ Standard',
               weight: 20,
+              weight_unit: 'g'
+            },
+            {
+              title: '8 cm',
+              price: process.env.PATCH_PRICE_8CM || '34.90',
+              sku: `${patch_id}_8cm`,
+              inventory_management: null,
+              inventory_policy: 'continue',
+              option1: '8 cm',
+              weight: 25,
+              weight_unit: 'g'
+            },
+            {
+              title: '10 cm',
+              price: process.env.PATCH_PRICE_10CM || '39.90',
+              sku: `${patch_id}_10cm`,
+              inventory_management: null,
+              inventory_policy: 'continue',
+              option1: '10 cm',
+              weight: 30,
               weight_unit: 'g'
             }
           ],
           options: [
             {
               name: 'Taille',
-              values: [`${size} cm`]
+              values: ['5 cm ⚠️', '6.5 cm ⭐ Standard', '8 cm', '10 cm']
             }
           ],
           metafields: [
@@ -278,7 +317,7 @@ export const createShopifyProduct = async (patchData) => {
             {
               namespace: 'ppatch',
               key: 'customer_email',
-              value: email,
+              value: email || '',
               type: 'single_line_text_field'
             },
             {
@@ -297,12 +336,6 @@ export const createShopifyProduct = async (patchData) => {
               namespace: 'ppatch',
               key: 'shape',
               value: shape,
-              type: 'single_line_text_field'
-            },
-            {
-              namespace: 'ppatch',
-              key: 'size',
-              value: size.toString(),
               type: 'single_line_text_field'
             },
             {
