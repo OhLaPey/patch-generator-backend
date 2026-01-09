@@ -113,6 +113,15 @@ app.get('/ready', (req, res) => {
   res.status(200).json({ ready: true });
 });
 
+// Route health pour keep-alive (alias)
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
 // ============================================
 // ROUTES - USER MANAGEMENT
 // ============================================
@@ -417,6 +426,28 @@ initializeServices().then(() => {
     console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🔓 CORS: OPEN (all origins)`);
     console.log('█'.repeat(60) + '\n');
+    
+    // ============================================
+    // KEEP-ALIVE: Ping automatique toutes les 10 min
+    // ============================================
+    const PING_INTERVAL = 10 * 60 * 1000; // 10 minutes
+    const SERVER_URL = process.env.SERVER_URL || `http://${HOST}:${PORT}`;
+    
+    const ping = async () => {
+      try {
+        const response = await fetch(`${SERVER_URL}/health`);
+        if (response.ok) {
+          console.log(`[${new Date().toISOString()}] 💚 Keep-alive ping OK`);
+        }
+      } catch (error) {
+        console.log(`[${new Date().toISOString()}] ⚠️ Keep-alive ping failed`);
+      }
+    };
+    
+    // Premier ping après 1 minute, puis toutes les 10 minutes
+    setTimeout(ping, 60 * 1000);
+    setInterval(ping, PING_INTERVAL);
+    console.log(`🏃 Keep-alive activé (ping toutes les 10 minutes)`);
   });
 
   const gracefulShutdown = (signal) => {
