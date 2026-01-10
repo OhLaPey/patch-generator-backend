@@ -272,8 +272,57 @@ async function main() {
   await mongoose.disconnect();
 }
 
-// Exécuter
-main().catch((error) => {
-  console.error('❌ Erreur:', error);
-  process.exit(1);
-});
+// Exécuter si appelé directement
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => {
+    console.error('❌ Erreur:', error);
+    process.exit(1);
+  });
+}
+
+// Export pour utilisation par le cron
+export async function syncToBrevo() {
+  // Vérifier les variables d'environnement
+  if (!CONFIG.mongoUri) {
+    throw new Error('MONGODB_URI manquant');
+  }
+  if (!CONFIG.brevoApiKey) {
+    throw new Error('BREVO_API_KEY manquant');
+  }
+
+  // Connexion MongoDB (si pas déjà connecté)
+  if (mongoose.connection.readyState !== 1) {
+    await mongoose.connect(CONFIG.mongoUri);
+  }
+
+  // Récupérer les paniers abandonnés
+  const users = await getAbandonedCarts();
+
+  if (users.length === 0) {
+    console.log('   Aucun panier abandonné à synchroniser.');
+    return { created: 0, updated: 0, errors: 0 };
+  }
+
+  console.log(`   ${users.length} utilisateurs à synchroniser`);
+
+  let created = 0;
+  let updated = 0;
+  let errors = 0;
+
+  for (const user of users) {
+    const result = await createOrUpdateBrevoContact(user);
+
+    if (result.success) {
+      if (result.action === 'created') created++;
+      else updated++;
+    } else {
+      errors++;
+    }
+
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  console.log(`   Résultat: ${created} créés, ${updated} mis à jour, ${errors} erreurs`);
+  
+  return { created, updated, errors };
+}
