@@ -448,6 +448,53 @@ initializeServices().then(() => {
     setTimeout(ping, 60 * 1000);
     setInterval(ping, PING_INTERVAL);
     console.log(`🏃 Keep-alive activé (ping toutes les 10 minutes)`);
+    
+    // ============================================
+    // CRON: Sync Brevo tous les jours à 9h
+    // ============================================
+    const syncBrevoToList = async () => {
+      if (!process.env.BREVO_API_KEY) {
+        console.log(`[${new Date().toISOString()}] ⏭️ Sync Brevo ignoré (BREVO_API_KEY non configuré)`);
+        return;
+      }
+      
+      console.log(`[${new Date().toISOString()}] 📧 Démarrage sync Brevo...`);
+      
+      try {
+        // Import dynamique du service
+        const { syncToBrevo } = await import('./services/syncBrevo.js');
+        await syncToBrevo();
+        console.log(`[${new Date().toISOString()}] ✅ Sync Brevo terminé`);
+      } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Sync Brevo erreur:`, error.message);
+      }
+    };
+    
+    // Calculer le délai jusqu'à 9h demain
+    const scheduleBrevoSync = () => {
+      const now = new Date();
+      const next9am = new Date();
+      next9am.setHours(9, 0, 0, 0);
+      
+      // Si 9h est déjà passé aujourd'hui, planifier pour demain
+      if (now >= next9am) {
+        next9am.setDate(next9am.getDate() + 1);
+      }
+      
+      const msUntil9am = next9am - now;
+      const hoursUntil = Math.round(msUntil9am / 1000 / 60 / 60 * 10) / 10;
+      
+      console.log(`📅 Prochaine sync Brevo dans ${hoursUntil}h (${next9am.toLocaleString('fr-FR')})`);
+      
+      // Premier sync à 9h
+      setTimeout(() => {
+        syncBrevoToList();
+        // Puis toutes les 24h
+        setInterval(syncBrevoToList, 24 * 60 * 60 * 1000);
+      }, msUntil9am);
+    };
+    
+    scheduleBrevoSync();
   });
 
   const gracefulShutdown = (signal) => {
