@@ -141,7 +141,7 @@ const getShapePrompt = (shape, backgroundColor, borderColor) => {
   const shapeDescriptions = {
     'square': {
       shape: 'Square',
-      description: 'square shaped embroidered patch with equal sides'
+      description: 'perfectly square embroidered patch with equal sides, 1:1 aspect ratio'
     },
     'logo_shape': {
       shape: 'Custom contour',
@@ -167,7 +167,41 @@ const getShapePrompt = (shape, backgroundColor, borderColor) => {
 
   const shapeInfo = shapeDescriptions[shape] || shapeDescriptions['square'];
 
-  return `${shapeInfo.shape} embroidered patch. Create a ${shapeInfo.description}. White background. Thick satin stitch borders in ${borderColor}. Fabric background fill in ${backgroundColor}. The input logo should be embroidered with realistic thread texture and stitching details. Product photography style, studio lighting, high quality render.`;
+  // ============================================
+  // PROMPT AMÉLIORÉ POUR IMAGES CARRÉES ET QUALITÉ
+  // ============================================
+  return `Create a realistic ${shapeInfo.description} based on the input logo.
+
+CRITICAL REQUIREMENTS:
+- Output image MUST be SQUARE format (1:1 aspect ratio, same width and height)
+- The patch must be CENTERED in the square image
+- Leave some margin/padding around the patch edges
+
+PATCH SPECIFICATIONS:
+- Shape: ${shapeInfo.shape}
+- Background fill: ${backgroundColor} (solid fabric texture with embroidery fill stitches)
+- Border: Thick satin stitch border in ${borderColor} (3-4mm wide, clean edges)
+- The input logo must be faithfully reproduced with realistic embroidery thread texture
+
+EMBROIDERY STYLE:
+- Realistic thread texture with visible individual stitches
+- Satin stitch for borders and text
+- Fill stitch for large colored areas
+- Proper thread direction following the contours
+- Slight 3D relief effect typical of embroidered patches
+
+PHOTOGRAPHY STYLE:
+- Clean white or light gray background
+- Professional product photography
+- Soft studio lighting with subtle shadows
+- High resolution, sharp details
+- Patch photographed from directly above (flat lay)
+
+DO NOT:
+- Add extra text or elements not in the original logo
+- Distort or stretch the logo
+- Make the patch too small in the frame
+- Add excessive decorative elements`;
 };
 
 export const generatePatchImage = async (logoBase64, backgroundColor, borderColor, shape = 'square') => {
@@ -185,7 +219,7 @@ export const generatePatchImage = async (logoBase64, backgroundColor, borderColo
     console.log('🎨 Generating patch with:', { backgroundColor, borderColor, shape });
     console.log('📏 Input logo size:', logoBase64.length, 'chars');
 
-    const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash-image' });
+    const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash-preview-05-20' });
 
     // Générer le prompt selon la forme
     const prompt = getShapePrompt(shape, backgroundColor, borderColor);
