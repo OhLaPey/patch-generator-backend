@@ -412,15 +412,11 @@ app.get('/api/migrate-square', async (req, res) => {
 
   try {
     const { Patch } = await import('./config/mongodb.js');
-    const { Storage } = await import('@google-cloud/storage');
+    const { getBucket } = await import('./config/gcs.js');
     const sharp = (await import('sharp')).default;
 
-    // Initialiser GCS
-    const storage = new Storage({
-      projectId: process.env.GCS_PROJECT_ID,
-      credentials: JSON.parse(process.env.GCS_CREDENTIALS || '{}')
-    });
-    const bucket = storage.bucket(process.env.GCS_BUCKET_NAME);
+    // Utiliser le bucket déjà initialisé
+    const bucket = getBucket();
 
     // Fonction de recadrage
     const cropToSquare = async (imageBuffer, targetSize = 1024) => {
