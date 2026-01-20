@@ -15,6 +15,68 @@ import {
 } from '../utils/helpers.js';
 import sharp from 'sharp';
 
+// ============================================
+// FONCTION UTILITAIRE: RECADRAGE CARRÉ
+// ============================================
+
+/**
+ * Recadre une image en format carré (1:1)
+ * Centre l'image et crop les bords si nécessaire
+ * @param {Buffer} imageBuffer - Buffer de l'image originale
+ * @param {number} targetSize - Taille cible en pixels (défaut: 1024)
+ * @returns {Promise<Buffer>} - Buffer de l'image recadrée
+ */
+const cropToSquare = async (imageBuffer, targetSize = 1024) => {
+  try {
+    // Obtenir les métadonnées de l'image
+    const metadata = await sharp(imageBuffer).metadata();
+    const { width, height } = metadata;
+
+    console.log(`📐 Original image: ${width}x${height}`);
+
+    // Si déjà carré et bonne taille, juste redimensionner
+    if (width === height) {
+      console.log('✅ Image already square, resizing to', targetSize);
+      return await sharp(imageBuffer)
+        .resize(targetSize, targetSize, { fit: 'fill' })
+        .png({ quality: 90 })
+        .toBuffer();
+    }
+
+    // Calculer le crop centré
+    const minDimension = Math.min(width, height);
+    const left = Math.floor((width - minDimension) / 2);
+    const top = Math.floor((height - minDimension) / 2);
+
+    console.log(`✂️ Cropping to square: ${minDimension}x${minDimension} from position (${left}, ${top})`);
+
+    // Crop en carré puis redimensionner
+    const croppedBuffer = await sharp(imageBuffer)
+      .extract({
+        left: left,
+        top: top,
+        width: minDimension,
+        height: minDimension
+      })
+      .resize(targetSize, targetSize, { fit: 'fill' })
+      .png({ quality: 90 })
+      .toBuffer();
+
+    // Vérifier le résultat
+    const finalMetadata = await sharp(croppedBuffer).metadata();
+    console.log(`✅ Final image: ${finalMetadata.width}x${finalMetadata.height}`);
+
+    return croppedBuffer;
+  } catch (error) {
+    console.error('❌ Error cropping to square:', error.message);
+    // En cas d'erreur, retourner l'image originale redimensionnée
+    return await sharp(imageBuffer)
+      .resize(targetSize, targetSize, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
+      .png({ quality: 90 })
+      .toBuffer();
+  }
+};
+
 export const extractColors = async (req, res, next) => {
   try {
     const { logo } = req.body;
@@ -127,7 +189,7 @@ export const generatePatch = async (req, res, next) => {
       throw new Error('Logo file exceeds 5MB limit');
     }
 
-    // ✅ NOUVEAU: Sauvegarder le logo original sur GCS
+    // ✅ Sauvegarder le logo original sur GCS
     console.log('📤 Sauvegarde du logo original sur GCS...');
     const originalLogoFilename = `logos/original_${patchId}_${Date.now()}.png`;
     
@@ -189,9 +251,16 @@ export const generatePatch = async (req, res, next) => {
     const generatedImageBuffer = Buffer.from(patchImageBase64, 'base64');
     console.log('🔍 Buffer length:', generatedImageBuffer.length, 'bytes');
 
-    // Upload vers GCS
+    // ============================================
+    // ✅ NOUVEAU: RECADRAGE EN FORMAT CARRÉ
+    // ============================================
+    console.log('📐 Cropping generated image to square format...');
+    const squareImageBuffer = await cropToSquare(generatedImageBuffer, 1024);
+    console.log('✅ Image cropped to square:', squareImageBuffer.length, 'bytes');
+
+    // Upload vers GCS (image carrée)
     const gcsFilename = generateFilename(patchId, 'png');
-    const publicImageUrl = await uploadToGCS(gcsFilename, generatedImageBuffer, 'image/png');
+    const publicImageUrl = await uploadToGCS(gcsFilename, squareImageBuffer, 'image/png');
 
     // Mise à jour du patch dans MongoDB
     patch.generated_image_url = publicImageUrl;
