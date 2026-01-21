@@ -133,15 +133,17 @@ Rules:
 /**
  * Générer le prompt selon la forme sélectionnée
  * VERSION AMÉLIORÉE avec instructions pour format carré et détails broderie
+ * + SUPPORT COMMENTAIRE UTILISATEUR pour regénération V2
  * 
  * @param {string} shape - Forme du patch
  * @param {string} backgroundColor - Couleur de fond
  * @param {string} borderColor - Couleur de bordure
+ * @param {string} userComment - Commentaire optionnel de l'utilisateur pour améliorer la génération
  * @returns {string} - Prompt pour Gemini
  */
-const getShapePrompt = (shape, backgroundColor, borderColor) => {
+const getShapePrompt = (shape, backgroundColor, borderColor, userComment = '') => {
   // ============================================
-  // AMÉLIORATION #1 : Sélecteur de formes (fin décembre)
+  // SÉLECTEUR DE FORMES
   // ============================================
   const shapeDescriptions = {
     'square': {
@@ -173,10 +175,9 @@ const getShapePrompt = (shape, backgroundColor, borderColor) => {
   const shapeInfo = shapeDescriptions[shape] || shapeDescriptions['square'];
 
   // ============================================
-  // AMÉLIORATION #2 : Prompt amélioré pour images carrées (mi-janvier)
-  // AMÉLIORATION #3 : Détails de broderie réalistes (mi-janvier)
+  // PROMPT DE BASE
   // ============================================
-  return `Create a realistic ${shapeInfo.description} based on the input logo.
+  let prompt = `Create a realistic ${shapeInfo.description} based on the input logo.
 
 CRITICAL REQUIREMENTS:
 - Output image MUST be SQUARE format (1:1 aspect ratio, same width and height)
@@ -208,9 +209,36 @@ DO NOT:
 - Distort or stretch the logo
 - Make the patch too small in the frame
 - Add excessive decorative elements`;
+
+  // ============================================
+  // AJOUT COMMENTAIRE UTILISATEUR (pour V2, V3...)
+  // ============================================
+  if (userComment && userComment.trim()) {
+    prompt += `
+
+USER FEEDBACK FOR IMPROVEMENT:
+The user has requested the following modifications for this version:
+"${userComment.trim()}"
+
+Please take this feedback into account and adjust the patch design accordingly.`;
+    
+    console.log('📝 User comment added to prompt:', userComment.trim());
+  }
+
+  return prompt;
 };
 
-export const generatePatchImage = async (logoBase64, backgroundColor, borderColor, shape = 'square') => {
+/**
+ * Générer une image de patch brodé
+ * 
+ * @param {string} logoBase64 - Logo en base64
+ * @param {string} backgroundColor - Couleur de fond
+ * @param {string} borderColor - Couleur de bordure
+ * @param {string} shape - Forme du patch
+ * @param {string} userComment - Commentaire optionnel pour améliorer la génération
+ * @returns {Promise<string>} - Image générée en base64
+ */
+export const generatePatchImage = async (logoBase64, backgroundColor, borderColor, shape = 'square', userComment = '') => {
   try {
     // MODE MOCK pour tests
     if (process.env.USE_MOCK_GENERATION === 'true') {
@@ -222,8 +250,12 @@ export const generatePatchImage = async (logoBase64, backgroundColor, borderColo
       initializeGemini();
     }
 
-    console.log('🎨 Generating patch with:', { backgroundColor, borderColor, shape });
+    console.log('🎨 Generating patch with:', { backgroundColor, borderColor, shape, hasComment: !!userComment });
     console.log('📏 Input logo size:', logoBase64.length, 'chars');
+    
+    if (userComment) {
+      console.log('💬 User comment:', userComment);
+    }
 
     // ============================================
     // ✅ MODÈLE QUI FONCTIONNE (version décembre)
@@ -231,9 +263,9 @@ export const generatePatchImage = async (logoBase64, backgroundColor, borderColo
     // ============================================
     const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash-image' });
 
-    // Générer le prompt selon la forme (avec améliorations)
-    const prompt = getShapePrompt(shape, backgroundColor, borderColor);
-    console.log('📝 Prompt:', prompt);
+    // Générer le prompt selon la forme (avec commentaire si présent)
+    const prompt = getShapePrompt(shape, backgroundColor, borderColor, userComment);
+    console.log('📝 Prompt length:', prompt.length, 'chars');
 
     const result = await model.generateContent([
       {
