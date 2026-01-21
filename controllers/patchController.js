@@ -39,7 +39,7 @@ const cropToSquare = async (imageBuffer, targetSize = 1024) => {
       console.log('✅ Image already square, resizing to', targetSize);
       return await sharp(imageBuffer)
         .resize(targetSize, targetSize, { fit: 'fill' })
-        .png({ quality: 90 })
+        .webp({ quality: 85 })
         .toBuffer();
     }
 
@@ -59,7 +59,7 @@ const cropToSquare = async (imageBuffer, targetSize = 1024) => {
         height: minDimension
       })
       .resize(targetSize, targetSize, { fit: 'fill' })
-      .png({ quality: 90 })
+      .webp({ quality: 85 })
       .toBuffer();
 
     // Vérifier le résultat
@@ -72,7 +72,7 @@ const cropToSquare = async (imageBuffer, targetSize = 1024) => {
     // En cas d'erreur, retourner l'image originale redimensionnée
     return await sharp(imageBuffer)
       .resize(targetSize, targetSize, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
-      .png({ quality: 90 })
+      .webp({ quality: 85 })
       .toBuffer();
   }
 };
@@ -294,9 +294,9 @@ export const generatePatch = async (req, res, next) => {
 
     // Upload vers GCS (image carrée) - avec version dans le nom
     const gcsFilename = version > 1 
-      ? generateFilename(patchId, 'png').replace('.png', `_v${version}.png`)
-      : generateFilename(patchId, 'png');
-    const publicImageUrl = await uploadToGCS(gcsFilename, squareImageBuffer, 'image/png');
+      ? generateFilename(patchId, 'webp').replace('.webp', `_v${version}.webp`)
+      : generateFilename(patchId, 'webp');
+    const publicImageUrl = await uploadToGCS(gcsFilename, squareImageBuffer, 'image/webp');
 
     // Mise à jour du patch dans MongoDB
     patch.generated_image_url = publicImageUrl;
