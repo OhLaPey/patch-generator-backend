@@ -5,10 +5,17 @@ dotenv.config();
 
 let client;
 
+// ============================================
+// MODÈLE GEMINI - CENTRALISÉ ICI
+// ============================================
+const GEMINI_MODEL_TEXT = 'gemini-2.0-flash';      // Pour extraction couleurs et détection nom
+const GEMINI_MODEL_IMAGE = 'gemini-2.0-flash';     // Pour génération d'images (patch)
+
 export const initializeGemini = () => {
   try {
     client = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
     console.log('✅ Gemini API initialized');
+    console.log('📌 Using models:', { text: GEMINI_MODEL_TEXT, image: GEMINI_MODEL_IMAGE });
     return client;
   } catch (error) {
     console.error('❌ Gemini init error:', error.message);
@@ -22,7 +29,7 @@ export const extractDominantColors = async (imageBase64) => {
       initializeGemini();
     }
 
-    const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
+    const model = client.getGenerativeModel({ model: GEMINI_MODEL_TEXT });
 
     const prompt =
       'Analyze this image and extract the 5 most dominant colors. ' +
@@ -70,7 +77,7 @@ export const detectLogoName = async (imageBase64) => {
       initializeGemini();
     }
 
-    const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
+    const model = client.getGenerativeModel({ model: GEMINI_MODEL_TEXT });
 
     const prompt = `Analyze this logo image and try to identify the organization name (sports club, team, company, association, etc.).
 
@@ -219,7 +226,10 @@ export const generatePatchImage = async (logoBase64, backgroundColor, borderColo
     console.log('🎨 Generating patch with:', { backgroundColor, borderColor, shape });
     console.log('📏 Input logo size:', logoBase64.length, 'chars');
 
-    const model = client.getGenerativeModel({ model: 'models/gemini-2.5-flash-preview-05-20' });
+    // ============================================
+    // ✅ MODÈLE CORRIGÉ - UTILISE LA CONSTANTE
+    // ============================================
+    const model = client.getGenerativeModel({ model: GEMINI_MODEL_IMAGE });
 
     // Générer le prompt selon la forme
     const prompt = getShapePrompt(shape, backgroundColor, borderColor);
