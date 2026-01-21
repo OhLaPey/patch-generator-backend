@@ -109,6 +109,9 @@ export const generatePatch = async (req, res, next) => {
     let shape;
     let size;
     let club_name;
+    let user_comment;  // ✅ NOUVEAU: Commentaire utilisateur
+    let version;       // ✅ NOUVEAU: Version du patch (1, 2, 3...)
+    let parent_patch_id; // ✅ NOUVEAU: ID du patch parent (pour regénération)
 
     if (req.is('multipart/form-data')) {
       // Android envoie FormData avec fichier
@@ -133,6 +136,9 @@ export const generatePatch = async (req, res, next) => {
       shape = req.body.shape || 'square';
       size = parseFloat(req.body.size) || 6.5;
       club_name = req.body.club_name || '';
+      user_comment = req.body.user_comment || '';  // ✅ NOUVEAU
+      version = parseInt(req.body.version) || 1;   // ✅ NOUVEAU
+      parent_patch_id = req.body.parent_patch_id || null; // ✅ NOUVEAU
       source = req.body.source || 'generator-page';
 
       console.log('📱 FormData upload (Android):', {
@@ -141,6 +147,8 @@ export const generatePatch = async (req, res, next) => {
         shape: shape,
         size: size,
         club_name: club_name,
+        user_comment: user_comment ? '✅ présent' : '❌ absent',
+        version: version,
       });
     } else {
       // iPhone/PC envoient du JSON avec base64
@@ -151,9 +159,23 @@ export const generatePatch = async (req, res, next) => {
       shape = req.body.shape || 'square';
       size = parseFloat(req.body.size) || 6.5;
       club_name = req.body.club_name || '';
+      user_comment = req.body.user_comment || '';  // ✅ NOUVEAU
+      version = parseInt(req.body.version) || 1;   // ✅ NOUVEAU
+      parent_patch_id = req.body.parent_patch_id || null; // ✅ NOUVEAU
       source = req.body.source || 'generator-page';
 
-      console.log('💻 JSON upload (iPhone/PC)', { shape: shape, size: size, club_name: club_name });
+      console.log('💻 JSON upload (iPhone/PC)', { 
+        shape: shape, 
+        size: size, 
+        club_name: club_name,
+        user_comment: user_comment ? '✅ présent' : '❌ absent',
+        version: version,
+      });
+    }
+
+    // ✅ Log du commentaire si présent
+    if (user_comment) {
+      console.log('💬 User comment for generation:', user_comment);
     }
 
     validateGenerationRequest({ logo, background_color, border_color, email });
@@ -164,7 +186,9 @@ export const generatePatch = async (req, res, next) => {
     logActivity('Patch Generation Started', { 
       patchId, 
       email, 
-      ipAddress: clientIP 
+      ipAddress: clientIP,
+      version: version,
+      hasComment: !!user_comment,
     });
 
     const patch = new Patch({
@@ -177,6 +201,9 @@ export const generatePatch = async (req, res, next) => {
       shape,
       size,
       club_name,
+      user_comment,        // ✅ NOUVEAU: Sauvegarder le commentaire
+      version,             // ✅ NOUVEAU: Sauvegarder la version
+      parent_patch_id,     // ✅ NOUVEAU: Lien vers patch parent
       source,
       status: 'processing',
     });
@@ -189,22 +216,26 @@ export const generatePatch = async (req, res, next) => {
       throw new Error('Logo file exceeds 5MB limit');
     }
 
-    // ✅ Sauvegarder le logo original sur GCS
-    console.log('📤 Sauvegarde du logo original sur GCS...');
-    const originalLogoFilename = `logos/original_${patchId}_${Date.now()}.png`;
-    
-    // Convertir en PNG propre avant upload
-    const originalLogoPng = await sharp(logoBuffer)
-      .png()
-      .toBuffer();
-    
-    const originalLogoUrl = await uploadToGCS(originalLogoFilename, originalLogoPng, 'image/png');
-    console.log('✅ Logo original sauvegardé:', originalLogoUrl);
+    // ✅ Sauvegarder le logo original sur GCS (seulement pour V1)
+    if (version === 1) {
+      console.log('📤 Sauvegarde du logo original sur GCS...');
+      const originalLogoFilename = `logos/original_${patchId}_${Date.now()}.png`;
+      
+      // Convertir en PNG propre avant upload
+      const originalLogoPng = await sharp(logoBuffer)
+        .png()
+        .toBuffer();
+      
+      const originalLogoUrl = await uploadToGCS(originalLogoFilename, originalLogoPng, 'image/png');
+      console.log('✅ Logo original sauvegardé:', originalLogoUrl);
 
-    // Mettre à jour le patch avec l'URL du logo original
-    patch.original_logo_url = originalLogoUrl;
-    patch.original_logo_gcs_path = originalLogoFilename;
-    await patch.save();
+      // Mettre à jour le patch avec l'URL du logo original
+      patch.original_logo_url = originalLogoUrl;
+      patch.original_logo_gcs_path = originalLogoFilename;
+      await patch.save();
+    } else {
+      console.log('🔄 Regénération V' + version + ' - Réutilisation du logo existant');
+    }
 
     // ✅ Compression adaptative selon la taille
     let optimizedLogoBuffer;
@@ -235,12 +266,15 @@ export const generatePatch = async (req, res, next) => {
 
     console.log('📦 Optimized size:', (optimizedLogoBuffer.length / 1024).toFixed(0) + 'KB');
 
-    // Génération de l'image du patch avec Gemini
+    // ============================================
+    // ✅ GÉNÉRATION AVEC COMMENTAIRE UTILISATEUR
+    // ============================================
     const patchImageBase64 = await generatePatchImage(
       optimizedLogoBuffer.toString('base64'),
       background_color,
       border_color,
-      shape
+      shape,
+      user_comment  // ✅ NOUVEAU: Passer le commentaire à Gemini
     );
 
     // ✅ LOGS DE DEBUG
@@ -252,14 +286,16 @@ export const generatePatch = async (req, res, next) => {
     console.log('🔍 Buffer length:', generatedImageBuffer.length, 'bytes');
 
     // ============================================
-    // ✅ NOUVEAU: RECADRAGE EN FORMAT CARRÉ
+    // ✅ RECADRAGE EN FORMAT CARRÉ
     // ============================================
     console.log('📐 Cropping generated image to square format...');
     const squareImageBuffer = await cropToSquare(generatedImageBuffer, 1024);
     console.log('✅ Image cropped to square:', squareImageBuffer.length, 'bytes');
 
-    // Upload vers GCS (image carrée)
-    const gcsFilename = generateFilename(patchId, 'png');
+    // Upload vers GCS (image carrée) - avec version dans le nom
+    const gcsFilename = version > 1 
+      ? generateFilename(patchId, 'png').replace('.png', `_v${version}.png`)
+      : generateFilename(patchId, 'png');
     const publicImageUrl = await uploadToGCS(gcsFilename, squareImageBuffer, 'image/png');
 
     // Mise à jour du patch dans MongoDB
@@ -281,7 +317,12 @@ export const generatePatch = async (req, res, next) => {
       console.warn('⚠️  Could not update user patch count:', userError.message);
     }
 
-    logActivity('Patch Generation Success', { patchId, imageUrl: publicImageUrl });
+    logActivity('Patch Generation Success', { 
+      patchId, 
+      imageUrl: publicImageUrl,
+      version: version,
+      hadComment: !!user_comment,
+    });
 
     res.json({
       success: true,
@@ -292,6 +333,8 @@ export const generatePatch = async (req, res, next) => {
       shape,
       size,
       club_name,
+      version,           // ✅ NOUVEAU: Retourner la version
+      user_comment,      // ✅ NOUVEAU: Retourner le commentaire utilisé
       created_at: patch.created_at,
     });
   } catch (error) {
@@ -373,6 +416,8 @@ export const getPatch = async (req, res, next) => {
         created_at: patch.created_at,
         views: patch.view_count,
         purchased: patch.purchased,
+        version: patch.version || 1,
+        user_comment: patch.user_comment || '',
       },
     });
   } catch (error) {
