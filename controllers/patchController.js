@@ -2,6 +2,7 @@ import { Patch } from '../config/mongodb.js';
 import { User } from '../models/User.js';
 import { uploadToGCS } from '../config/gcs.js';
 import { generatePatchImage, extractDominantColors } from '../config/gemini.js';
+import { sendContactToBrevo } from '../services/brevo.js';
 import { 
   validateGenerationRequest, 
   validateColorExtractionRequest,
@@ -305,16 +306,34 @@ export const generatePatch = async (req, res, next) => {
     await patch.save();
 
     // ✅ Incrémenter le compteur de patchs pour l'utilisateur
+    let patchesCount = 1;
     try {
-      await User.updateOne(
+      const userUpdate = await User.findOneAndUpdate(
         { email: sanitizeEmail(email) },
         { 
           $inc: { patches_generated: 1 },
           $set: { last_activity: new Date() }
-        }
+        },
+        { new: true }
       );
+      patchesCount = userUpdate?.patches_generated || 1;
     } catch (userError) {
       console.warn('⚠️  Could not update user patch count:', userError.message);
+    }
+
+    // ✅ Envoyer le contact à Brevo pour l'automation email
+    try {
+      await sendContactToBrevo({
+        email: sanitizeEmail(email),
+        firstName: req.body.first_name || '',
+        segment: req.body.segment || 'supporter',
+        patchImageUrl: publicImageUrl,
+        clubName: club_name,
+        patchId: patchId,
+        patchesGenerated: patchesCount,
+      });
+    } catch (brevoError) {
+      console.warn('⚠️  Brevo sync error (non-blocking):', brevoError.message);
     }
 
     logActivity('Patch Generation Success', { 
