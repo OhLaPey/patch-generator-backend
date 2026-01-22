@@ -27,7 +27,7 @@ import sharp from 'sharp';
  * @param {number} targetSize - Taille cible en pixels (défaut: 1024)
  * @returns {Promise<Buffer>} - Buffer de l'image recadrée
  */
-const cropToSquare = async (imageBuffer, targetSize = 1024) => {
+const cropToSquare = async (imageBuffer, targetSize = 600) => {
   try {
     // Obtenir les métadonnées de l'image
     const metadata = await sharp(imageBuffer).metadata();
