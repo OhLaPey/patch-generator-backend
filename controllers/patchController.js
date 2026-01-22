@@ -289,8 +289,8 @@ export const generatePatch = async (req, res, next) => {
     // ============================================
     // ✅ RECADRAGE EN FORMAT CARRÉ
     // ============================================
-    console.log('📐 Cropping generated image to square format...');
-    const squareImageBuffer = await cropToSquare(generatedImageBuffer, 1024);
+console.log('📐 Cropping generated image to square format (600x600)...');
+const squareImageBuffer = await cropToSquare(generatedImageBuffer, 600);
     console.log('✅ Image cropped to square:', squareImageBuffer.length, 'bytes');
 
     // Upload vers GCS (image carrée) - avec version dans le nom
