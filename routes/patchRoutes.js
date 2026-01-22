@@ -1,4 +1,5 @@
 import express from 'express';
+import { migrateImages } from '../controllers/migrate-images-route.js';
 import {
   extractColors,
   generatePatch,
@@ -14,5 +15,6 @@ router.post('/generate-patch', generatePatch);
 router.get('/gallery', getGallery);
 router.get('/patch/:patchId', getPatch);
 router.get('/stats', getStats);
+router.get('/admin/migrate-images', migrateImages);
 
 export default router;
