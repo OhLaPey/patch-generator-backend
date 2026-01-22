@@ -1,5 +1,5 @@
 import express from 'express';
-import { migrateImages } from '../controllers/migrate-images-route.js';
+import { migrateImages } from './migrate-images-route.js';
 import {
   extractColors,
   generatePatch,
