@@ -132,7 +132,7 @@ export const sendPatchEmail = async (orderData, files) => {
 
   try {
     const { data, error } = await resend.emails.send({
-      from: 'PPATCH Broderie <onboarding@resend.dev>',
+      from: 'PPATCH Broderie <contact@ppatch.shop>',
       to: [process.env.NOTIFICATION_EMAIL || 'contact@ppatch.shop'],
       subject: `🧵 Commande #${orderNumber} - Patch ${patchId.substring(0, 8)} à broder`,
       html: emailHtml,
@@ -162,7 +162,7 @@ export const sendTestEmail = async () => {
 
   try {
     const { data, error } = await resend.emails.send({
-      from: 'PPATCH Test <onboarding@resend.dev>',
+      from: 'PPATCH <contact@ppatch.shop>',
       to: [process.env.NOTIFICATION_EMAIL || 'contact@ppatch.shop'],
       subject: '✅ Test email PPATCH - Configuration OK',
       html: `
