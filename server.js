@@ -9,9 +9,9 @@ import { initializeEmailService } from './services/emailService.js';
 import rateLimiter from './middleware/rateLimiter.js';
 import errorHandler from './middleware/errorHandler.js';
 import { User } from './models/User.js';
-import { migrateImages } from './routes/migrate-images-route.js';
 import { getClientIP } from './utils/helpers.js';
 import webhookRoutes from './routes/webhooks.js';
+import { migrateImages } from './routes/migrate-images-route.js';  // ✅ AJOUTÉ
 import {
   extractColors,
   generatePatch,
@@ -379,9 +379,6 @@ app.post('/api/create-shopify-product', async (req, res, next) => {
   }
 });
 
-// Route de migration des images
-app.get('/api/admin/migrate-images', migrateImages);
-
 // ============================================
 // ROUTES - WEBHOOKS SHOPIFY
 // ============================================
@@ -399,6 +396,11 @@ app.get('/api', (req, res) => {
     description: 'Backend for PPATCH embroidered patch generator',
   });
 });
+
+// ============================================
+// ROUTE: MIGRATION DES IMAGES (1024→600)
+// ============================================
+app.get('/api/admin/migrate-images', migrateImages);  // ✅ AJOUTÉ
 
 // ============================================
 // ERROR HANDLERS
