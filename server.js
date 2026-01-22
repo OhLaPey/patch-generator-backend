@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import sharp from 'sharp';
 import { connectDB } from './config/mongodb.js';
 import { initializeGCS } from './config/gcs.js';
 import { initializeGemini, detectLogoName } from './config/gemini.js';
@@ -394,6 +395,139 @@ app.get('/api', (req, res) => {
     version: '1.0.0',
     description: 'Backend for PPATCH embroidered patch generator',
   });
+});
+
+// ============================================
+// ROUTE ADMIN: MIGRATION PNG → WebP
+// ============================================
+// ⚠️ TEMPORAIRE - À SUPPRIMER APRÈS USAGE
+// Usage: /api/admin/migrate-images?secret=PPATCH_MIGRATE_2026
+// ============================================
+
+app.get('/api/admin/migrate-images', async (req, res) => {
+  const SECRET = 'PPATCH_MIGRATE_2026';
+  if (req.query.secret !== SECRET) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  console.log('🚀 Starting PNG → WebP migration...');
+  
+  const results = {
+    started: new Date().toISOString(),
+    processed: 0,
+    converted: 0,
+    errors: [],
+    savings: { before: 0, after: 0 }
+  };
+
+  try {
+    const { getBucket } = await import('./config/gcs.js');
+    const { Patch } = await import('./config/mongodb.js');
+    const bucket = getBucket();
+    
+    // Lister tous les fichiers PNG
+    const [files] = await bucket.getFiles({ prefix: 'patches/' });
+    const pngFiles = files.filter(f => 
+      f.name.toLowerCase().endsWith('.png') && 
+      !f.name.includes('/logos/')
+    );
+    
+    console.log(`📋 Found ${pngFiles.length} PNG files`);
+    results.total = pngFiles.length;
+
+    // Limiter à 20 fichiers par appel (évite timeout Render)
+    const filesToProcess = pngFiles.slice(0, 20);
+    
+    for (const file of filesToProcess) {
+      results.processed++;
+      const pngPath = file.name;
+      
+      try {
+        console.log(`[${results.processed}/${filesToProcess.length}] Converting: ${pngPath}`);
+        
+        // 1. Télécharger le PNG
+        const [pngBuffer] = await file.download();
+        const originalSize = pngBuffer.length;
+        results.savings.before += originalSize;
+        
+        // 2. Convertir en WebP
+        const webpBuffer = await sharp(pngBuffer)
+          .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+          .webp({ quality: 85 })
+          .toBuffer();
+        
+        const newSize = webpBuffer.length;
+        results.savings.after += newSize;
+        
+        console.log(`   📦 ${(originalSize/1024).toFixed(0)}Ko → ${(newSize/1024).toFixed(0)}Ko`);
+        
+        // 3. Upload le WebP
+        const webpPath = pngPath.replace(/\.png$/i, '.webp');
+        const webpFile = bucket.file(webpPath);
+        
+        await webpFile.save(webpBuffer, {
+          metadata: {
+            contentType: 'image/webp',
+            cacheControl: 'public, max-age=31536000',
+          },
+        });
+        
+        // 4. Mettre à jour MongoDB
+        const filenameMatch = pngPath.match(/patch_([a-f0-9-]+)/i);
+        if (filenameMatch) {
+          const patchIdPartial = filenameMatch[1];
+          await Patch.updateMany(
+            { generated_image_gcs_path: { $regex: patchIdPartial } },
+            { 
+              $set: { 
+                generated_image_url: `https://storage.googleapis.com/${bucket.name}/${webpPath}`,
+                generated_image_gcs_path: webpPath 
+              } 
+            }
+          );
+          console.log(`   🔗 MongoDB updated`);
+        }
+        
+        // 5. Supprimer l'ancien PNG
+        await file.delete();
+        console.log(`   🗑️ Old PNG deleted`);
+        
+        results.converted++;
+        
+      } catch (error) {
+        console.error(`   ❌ Error: ${error.message}`);
+        results.errors.push({ file: pngPath, error: error.message });
+      }
+    }
+    
+    // Résumé
+    results.completed = new Date().toISOString();
+    results.remainingFiles = pngFiles.length - filesToProcess.length;
+    results.savingsPercent = results.savings.before > 0 
+      ? ((1 - results.savings.after / results.savings.before) * 100).toFixed(1) + '%'
+      : '0%';
+    results.spaceSavedMB = ((results.savings.before - results.savings.after) / 1024 / 1024).toFixed(2);
+    
+    console.log('\n✅ Migration batch complete!');
+    console.log(`   Converted: ${results.converted}/${results.processed}`);
+    console.log(`   Savings: ${results.savingsPercent} (${results.spaceSavedMB} Mo)`);
+    
+    if (results.remainingFiles > 0) {
+      console.log(`   ⚠️ ${results.remainingFiles} files remaining - call this endpoint again`);
+    }
+    
+    res.json({
+      success: true,
+      message: results.remainingFiles > 0 
+        ? `Batch complete. Call again to process ${results.remainingFiles} more files.`
+        : 'All files migrated!',
+      results
+    });
+    
+  } catch (error) {
+    console.error('❌ Migration failed:', error);
+    res.status(500).json({ success: false, error: error.message, results });
+  }
 });
 
 // ============================================
