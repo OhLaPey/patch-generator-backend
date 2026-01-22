@@ -44,7 +44,7 @@ export const uploadToGCS = async (filename, buffer, contentType = 'image/png') =
     await file.save(buffer, {
       metadata: {
         contentType: contentType,
-        cacheControl: 'public, max-age=86400', // 24h cache
+        cacheControl: 'public, max-age=31536000', // 24h cache
       },
     });
 
