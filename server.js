@@ -9,6 +9,7 @@ import { initializeEmailService } from './services/emailService.js';
 import rateLimiter from './middleware/rateLimiter.js';
 import errorHandler from './middleware/errorHandler.js';
 import { User } from './models/User.js';
+import { migrateImages } from './routes/migrate-images-route.js';
 import { getClientIP } from './utils/helpers.js';
 import webhookRoutes from './routes/webhooks.js';
 import {
@@ -377,6 +378,9 @@ app.post('/api/create-shopify-product', async (req, res, next) => {
     next(error);
   }
 });
+
+// Route de migration des images
+app.get('/api/admin/migrate-images', migrateImages);
 
 // ============================================
 // ROUTES - WEBHOOKS SHOPIFY
