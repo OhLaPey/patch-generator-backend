@@ -77,6 +77,45 @@ const downloadImage = async (url) => {
 };
 
 /**
+ * Envoyer un événement à Brevo pour déclencher l'automation
+ * @param {string} email - Email du client
+ * @param {Object} eventData - Données de l'événement
+ */
+const sendBrevoEvent = async (email, eventData) => {
+  if (!process.env.BREVO_API_KEY) {
+    console.warn('⚠️  BREVO_API_KEY non configurée - événement non envoyé');
+    return false;
+  }
+
+  try {
+    const response = await fetch('https://api.brevo.com/v3/events', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        event_name: 'order_paid',
+        email: email,
+        event_data: eventData
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Brevo API error: ${response.status} - ${errorText}`);
+    }
+
+    console.log('✅ Événement Brevo envoyé avec succès');
+    return true;
+  } catch (error) {
+    console.error('❌ Erreur envoi événement Brevo:', error.message);
+    return false;
+  }
+};
+
+/**
  * Handler principal pour le webhook orders/paid
  */
 export const handleOrderPaid = async (req, res) => {
@@ -184,7 +223,7 @@ export const handleOrderPaid = async (req, res) => {
       console.warn('⚠️  Impossible de vectoriser - logo original non disponible');
     }
 
-    // 8. Préparer les données pour l'email
+    // 8. Préparer les données pour l'email interne (existant)
     const shippingAddress = orderData.shipping_address || orderData.billing_address;
     
     const emailOrderData = {
@@ -204,19 +243,19 @@ export const handleOrderPaid = async (req, res) => {
       totalPrice: orderData.total_price
     };
 
-    // Email contient: le PATCH FINAL (image) + le LOGO VECTORISÉ (SVG)
+    // Email interne contient: le PATCH FINAL (image) + le LOGO VECTORISÉ (SVG)
     const emailFiles = {
       originalImage: patchImageBuffer,  // Le rendu du patch final
       svgFile: svgResult?.svg ? Buffer.from(svgResult.svg, 'utf-8') : null  // Le logo vectorisé
     };
 
-    // 9. Envoyer l'email
-    console.log('📧 Envoi de l\'email...');
+    // 9. Envoyer l'email interne (existant)
+    console.log('📧 Envoi de l\'email interne...');
     try {
       await sendPatchEmail(emailOrderData, emailFiles);
-      console.log('✅ Email envoyé avec succès!');
+      console.log('✅ Email interne envoyé avec succès!');
     } catch (emailError) {
-      console.error('❌ Erreur envoi email:', emailError.message);
+      console.error('❌ Erreur envoi email interne:', emailError.message);
       // Log mais ne pas faire échouer le webhook
     }
 
@@ -227,6 +266,32 @@ export const handleOrderPaid = async (req, res) => {
     patch.email_sent_at = new Date();
     await patch.save();
 
+    // 11. NOUVEAU: Envoyer l'événement Brevo pour déclencher l'automation client
+    // Uniquement si la vectorisation a réussi (condition dans Brevo: vectorized = true)
+    const customerEmail = orderData.email || orderData.contact_email;
+    if (customerEmail) {
+      console.log('📤 Envoi événement Brevo...');
+      
+      const brevoEventData = {
+        order_number: orderData.order_number || orderData.name,
+        patch_id: patchId,
+        customer_name: `${orderData.customer?.first_name || ''} ${orderData.customer?.last_name || ''}`.trim() || 'Client',
+        total_price: orderData.total_price,
+        patch_image_url: patch.generated_image_url || '',
+        vectorized: !!svgResult,  // true si vectorisation réussie, false sinon
+        order_date: orderData.created_at
+      };
+
+      const brevoSent = await sendBrevoEvent(customerEmail, brevoEventData);
+      
+      // Mettre à jour le patch avec le statut Brevo
+      patch.brevo_event_sent = brevoSent;
+      patch.brevo_event_sent_at = brevoSent ? new Date() : null;
+      await patch.save();
+    } else {
+      console.warn('⚠️  Pas d\'email client - événement Brevo non envoyé');
+    }
+
     console.log('='.repeat(60));
     console.log('✅ TRAITEMENT COMMANDE TERMINÉ');
     console.log('='.repeat(60) + '\n');
@@ -236,7 +301,8 @@ export const handleOrderPaid = async (req, res) => {
       order_number: orderData.order_number,
       patch_id: patchId,
       vectorized: !!svgResult,
-      email_sent: true
+      email_sent: true,
+      brevo_event_sent: patch.brevo_event_sent || false
     });
 
   } catch (error) {
