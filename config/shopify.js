@@ -261,16 +261,6 @@ export const createShopifyProduct = async (patchData) => {
           ],
           variants: [
             {
-              title: '5 cm',
-              price: '10.00',
-              sku: `${patch_id}_5cm`,
-              inventory_management: null,
-              inventory_policy: 'continue',
-              option1: '5 cm ⚠️',
-              weight: 15,
-              weight_unit: 'g'
-            },
-            {
               title: '6.5 cm ⭐',
               price: '10.00',
               sku: `${patch_id}_6.5cm`,
@@ -278,6 +268,16 @@ export const createShopifyProduct = async (patchData) => {
               inventory_policy: 'continue',
               option1: '6.5 cm ⭐ Standard',
               weight: 20,
+              weight_unit: 'g'
+            },
+            {
+              title: '5 cm',
+              price: '10.00',
+              sku: `${patch_id}_5cm`,
+              inventory_management: null,
+              inventory_policy: 'continue',
+              option1: '5 cm ⚠️',
+              weight: 15,
               weight_unit: 'g'
             },
             {
@@ -304,7 +304,7 @@ export const createShopifyProduct = async (patchData) => {
           options: [
             {
               name: 'Taille',
-              values: ['5 cm ⚠️', '6.5 cm ⭐ Standard', '8 cm', '10 cm']
+              values: ['6.5 cm ⭐ Standard', '5 cm ⚠️', '8 cm', '10 cm']
             }
           ],
           metafields: [
