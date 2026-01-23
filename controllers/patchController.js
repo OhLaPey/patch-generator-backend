@@ -1,6 +1,6 @@
 import { Patch } from '../config/mongodb.js';
 import { User } from '../models/User.js';
-import { uploadToGCS } from '../config/gcs.js';
+import { uploadToGCS, uploadPatchOptimized } from '../config/gcs.js';
 import { generatePatchImage, extractDominantColors } from '../config/gemini.js';
 import { sendContactToBrevo } from '../services/brevo.js';
 import { 
@@ -23,11 +23,12 @@ import sharp from 'sharp';
 /**
  * Recadre une image en format carré (1:1)
  * Centre l'image et crop les bords si nécessaire
+ * ✅ OPTIMISÉ: Taille réduite à 550px pour PageSpeed
  * @param {Buffer} imageBuffer - Buffer de l'image originale
- * @param {number} targetSize - Taille cible en pixels (défaut: 1024)
+ * @param {number} targetSize - Taille cible en pixels (défaut: 550 pour PageSpeed)
  * @returns {Promise<Buffer>} - Buffer de l'image recadrée
  */
-const cropToSquare = async (imageBuffer, targetSize = 600) => {
+const cropToSquare = async (imageBuffer, targetSize = 550) => {
   try {
     // Obtenir les métadonnées de l'image
     const metadata = await sharp(imageBuffer).metadata();
@@ -40,7 +41,11 @@ const cropToSquare = async (imageBuffer, targetSize = 600) => {
       console.log('✅ Image already square, resizing to', targetSize);
       return await sharp(imageBuffer)
         .resize(targetSize, targetSize, { fit: 'fill' })
-        .webp({ quality: 85 })
+        .webp({ 
+          quality: 80,          // ✅ OPTIMISÉ: 80 au lieu de 85
+          effort: 6,            // ✅ NOUVEAU: Compression maximale
+          smartSubsample: true, // ✅ NOUVEAU: Meilleure compression couleurs
+        })
         .toBuffer();
     }
 
@@ -60,7 +65,11 @@ const cropToSquare = async (imageBuffer, targetSize = 600) => {
         height: minDimension
       })
       .resize(targetSize, targetSize, { fit: 'fill' })
-      .webp({ quality: 85 })
+      .webp({ 
+        quality: 80,          // ✅ OPTIMISÉ: 80 au lieu de 85
+        effort: 6,            // ✅ NOUVEAU: Compression maximale
+        smartSubsample: true, // ✅ NOUVEAU: Meilleure compression couleurs
+      })
       .toBuffer();
 
     // Vérifier le résultat
@@ -73,7 +82,7 @@ const cropToSquare = async (imageBuffer, targetSize = 600) => {
     // En cas d'erreur, retourner l'image originale redimensionnée
     return await sharp(imageBuffer)
       .resize(targetSize, targetSize, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
-      .webp({ quality: 85 })
+      .webp({ quality: 80 })
       .toBuffer();
   }
 };
@@ -110,9 +119,9 @@ export const generatePatch = async (req, res, next) => {
     let shape;
     let size;
     let club_name;
-    let user_comment;  // ✅ NOUVEAU: Commentaire utilisateur
-    let version;       // ✅ NOUVEAU: Version du patch (1, 2, 3...)
-    let parent_patch_id; // ✅ NOUVEAU: ID du patch parent (pour regénération)
+    let user_comment;  // Commentaire utilisateur
+    let version;       // Version du patch (1, 2, 3...)
+    let parent_patch_id; // ID du patch parent (pour regénération)
 
     if (req.is('multipart/form-data')) {
       // Android envoie FormData avec fichier
@@ -137,9 +146,9 @@ export const generatePatch = async (req, res, next) => {
       shape = req.body.shape || 'square';
       size = parseFloat(req.body.size) || 6.5;
       club_name = req.body.club_name || '';
-      user_comment = req.body.user_comment || '';  // ✅ NOUVEAU
-      version = parseInt(req.body.version) || 1;   // ✅ NOUVEAU
-      parent_patch_id = req.body.parent_patch_id || null; // ✅ NOUVEAU
+      user_comment = req.body.user_comment || '';
+      version = parseInt(req.body.version) || 1;
+      parent_patch_id = req.body.parent_patch_id || null;
       source = req.body.source || 'generator-page';
 
       console.log('📱 FormData upload (Android):', {
@@ -160,9 +169,9 @@ export const generatePatch = async (req, res, next) => {
       shape = req.body.shape || 'square';
       size = parseFloat(req.body.size) || 6.5;
       club_name = req.body.club_name || '';
-      user_comment = req.body.user_comment || '';  // ✅ NOUVEAU
-      version = parseInt(req.body.version) || 1;   // ✅ NOUVEAU
-      parent_patch_id = req.body.parent_patch_id || null; // ✅ NOUVEAU
+      user_comment = req.body.user_comment || '';
+      version = parseInt(req.body.version) || 1;
+      parent_patch_id = req.body.parent_patch_id || null;
       source = req.body.source || 'generator-page';
 
       console.log('💻 JSON upload (iPhone/PC)', { 
@@ -174,7 +183,7 @@ export const generatePatch = async (req, res, next) => {
       });
     }
 
-    // ✅ Log du commentaire si présent
+    // Log du commentaire si présent
     if (user_comment) {
       console.log('💬 User comment for generation:', user_comment);
     }
@@ -202,9 +211,9 @@ export const generatePatch = async (req, res, next) => {
       shape,
       size,
       club_name,
-      user_comment,        // ✅ NOUVEAU: Sauvegarder le commentaire
-      version,             // ✅ NOUVEAU: Sauvegarder la version
-      parent_patch_id,     // ✅ NOUVEAU: Lien vers patch parent
+      user_comment,
+      version,
+      parent_patch_id,
       source,
       status: 'processing',
     });
@@ -217,7 +226,7 @@ export const generatePatch = async (req, res, next) => {
       throw new Error('Logo file exceeds 5MB limit');
     }
 
-    // ✅ Sauvegarder le logo original sur GCS (seulement pour V1)
+    // Sauvegarder le logo original sur GCS (seulement pour V1)
     if (version === 1) {
       console.log('📤 Sauvegarde du logo original sur GCS...');
       const originalLogoFilename = `logos/original_${patchId}_${Date.now()}.png`;
@@ -238,7 +247,7 @@ export const generatePatch = async (req, res, next) => {
       console.log('🔄 Regénération V' + version + ' - Réutilisation du logo existant');
     }
 
-    // ✅ Compression adaptative selon la taille
+    // Compression adaptative selon la taille
     let optimizedLogoBuffer;
     const sizeInKB = logoBuffer.length / 1024;
 
@@ -268,17 +277,17 @@ export const generatePatch = async (req, res, next) => {
     console.log('📦 Optimized size:', (optimizedLogoBuffer.length / 1024).toFixed(0) + 'KB');
 
     // ============================================
-    // ✅ GÉNÉRATION AVEC COMMENTAIRE UTILISATEUR
+    // GÉNÉRATION AVEC COMMENTAIRE UTILISATEUR
     // ============================================
     const patchImageBase64 = await generatePatchImage(
       optimizedLogoBuffer.toString('base64'),
       background_color,
       border_color,
       shape,
-      user_comment  // ✅ NOUVEAU: Passer le commentaire à Gemini
+      user_comment
     );
 
-    // ✅ LOGS DE DEBUG
+    // LOGS DE DEBUG
     console.log('🔍 Received base64 length:', patchImageBase64.length);
     console.log('🔍 Starts with:', patchImageBase64.substring(0, 50));
 
@@ -287,16 +296,20 @@ export const generatePatch = async (req, res, next) => {
     console.log('🔍 Buffer length:', generatedImageBuffer.length, 'bytes');
 
     // ============================================
-    // ✅ RECADRAGE EN FORMAT CARRÉ
+    // ✅ RECADRAGE EN FORMAT CARRÉ - OPTIMISÉ PAGESPEED
     // ============================================
-console.log('📐 Cropping generated image to square format (600x600)...');
-const squareImageBuffer = await cropToSquare(generatedImageBuffer, 600);
+    console.log('📐 Cropping generated image to square format (550x550 for PageSpeed)...');
+    const squareImageBuffer = await cropToSquare(generatedImageBuffer, 550); // ✅ 550 au lieu de 600
     console.log('✅ Image cropped to square:', squareImageBuffer.length, 'bytes');
 
-    // Upload vers GCS (image carrée) - avec version dans le nom
+    // ============================================
+    // ✅ UPLOAD OPTIMISÉ POUR PAGESPEED
+    // ============================================
     const gcsFilename = version > 1 
       ? generateFilename(patchId, 'webp').replace('.webp', `_v${version}.webp`)
       : generateFilename(patchId, 'webp');
+    
+    // ✅ Upload direct sans ré-optimisation (déjà fait dans cropToSquare)
     const publicImageUrl = await uploadToGCS(gcsFilename, squareImageBuffer, 'image/webp');
 
     // Mise à jour du patch dans MongoDB
@@ -305,7 +318,7 @@ const squareImageBuffer = await cropToSquare(generatedImageBuffer, 600);
     patch.status = 'generated';
     await patch.save();
 
-    // ✅ Incrémenter le compteur de patchs pour l'utilisateur
+    // Incrémenter le compteur de patchs pour l'utilisateur
     let patchesCount = 1;
     try {
       const userUpdate = await User.findOneAndUpdate(
@@ -321,7 +334,7 @@ const squareImageBuffer = await cropToSquare(generatedImageBuffer, 600);
       console.warn('⚠️  Could not update user patch count:', userError.message);
     }
 
-    // ✅ Envoyer le contact à Brevo pour l'automation email
+    // Envoyer le contact à Brevo pour l'automation email
     try {
       await sendContactToBrevo({
         email: sanitizeEmail(email),
@@ -352,8 +365,8 @@ const squareImageBuffer = await cropToSquare(generatedImageBuffer, 600);
       shape,
       size,
       club_name,
-      version,           // ✅ NOUVEAU: Retourner la version
-      user_comment,      // ✅ NOUVEAU: Retourner le commentaire utilisé
+      version,
+      user_comment,
       created_at: patch.created_at,
     });
   } catch (error) {
