@@ -156,7 +156,8 @@ async function getNextClubForLogo() {
     const hasLogo = logoUrl && logoUrl.startsWith('http');
     const noShopifyStatus = !statutShopify || statutShopify.trim() === '';
     const notRejected = statutShopify !== 'rejected';
-    if (hasLogo && noShopifyStatus && notRejected) {
+    const notProcessing = statutShopify !== 'processing';
+    if (hasLogo && noShopifyStatus && notRejected && notProcessing) {
       return {
         row: row,
         data: {
@@ -593,6 +594,8 @@ async function handleCallbackQuery(query) {
 
     if (action === 'logo_skip') {
       await bot.answerCallbackQuery(query.id, { text: '⏭️ Passé' });
+      // Marquer comme "skipped" pour ne pas le reproposer
+      await updateLogoStatus(row, 'skipped');
       userState.delete(chatId);
       return sendNextLogo(chatId);
     }
@@ -610,13 +613,18 @@ async function handleCallbackQuery(query) {
         return bot.answerCallbackQuery(query.id, { text: '❌ Logo non trouvé' });
       }
       await bot.answerCallbackQuery(query.id, { text: '⏳ Création en cours...' });
+      
+      // Marquer immédiatement comme "processing" pour passer au suivant
+      await updateLogoStatus(row, 'processing');
+      
       await bot.sendMessage(chatId,
         '⏳ Création de la page Shopify pour *' + data.club + '*...\n' +
         '📸 Logo: ' + selectedLogo.source + '\n' +
         '_(génération visuels + produit, ~2-3 min)_',
         { parse_mode: 'Markdown' }
       );
-   // Lancer la création en arrière-plan (sans attendre)
+      
+      // Lancer la création en arrière-plan (sans attendre)
       createClubShopifyPage(data, selectedLogo.url).then(function(result) {
         if (result.success) {
           updateLogoStatus(row, result.productUrl);
@@ -626,7 +634,8 @@ async function handleCallbackQuery(query) {
             { parse_mode: 'Markdown' }
           );
         } else {
-          bot.sendMessage(chatId, '❌ Erreur création: ' + result.error);
+          updateLogoStatus(row, 'error: ' + result.error);
+          bot.sendMessage(chatId, '❌ Erreur création pour ' + data.club + ': ' + result.error);
         }
       });
       
