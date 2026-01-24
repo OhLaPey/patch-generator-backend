@@ -633,6 +633,20 @@ async function handleCallbackQuery(query) {
   }
 }
 
+async function stopBot() {
+  if (bot) {
+    try {
+      await bot.stopPolling();
+      console.log('🛑 Bot polling arrêté');
+    } catch (e) {
+      console.log('⚠️ Erreur arrêt polling: ' + e.message);
+    }
+  }
+}
+
+process.on('SIGTERM', stopBot);
+process.on('SIGINT', stopBot);
+
 export async function startTelegramBot() {
   CONFIG = getConfig();
   if (!CONFIG.telegramToken) {
@@ -644,8 +658,15 @@ export async function startTelegramBot() {
     return null;
   }
   try {
+    await stopBot();
     await initGoogleSheets();
-    bot = new TelegramBot(CONFIG.telegramToken, { polling: true });
+    bot = new TelegramBot(CONFIG.telegramToken, { 
+      polling: { 
+        interval: 1000, 
+        autoStart: true, 
+        params: { timeout: 10 } 
+      } 
+    });
     setupBotCommands();
     console.log('✅ Bot Telegram démarré');
     if (CONFIG.adminChatId) {
