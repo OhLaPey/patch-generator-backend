@@ -1,7 +1,7 @@
 {
   "name": "patch-generator-backend",
-  "version": "1.0.0",
-  "description": "Backend for PPATCH embroidered patch generator with AI",
+  "version": "2.0.0",
+  "description": "Backend unifié PPATCH - API + Bot Telegram + Automation Shopify",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -17,15 +17,18 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "express-rate-limit": "^7.1.5",
+    "google-auth-library": "^9.0.0",
+    "google-spreadsheet": "^4.1.0",
     "mongodb": "^6.21.0",
     "mongoose": "^8.0.0",
     "multer": "^1.4.5-lts.1",
+    "node-telegram-bot-api": "^0.64.0",
     "nodemailer": "^6.9.8",
     "potrace": "^2.1.8",
+    "resend": "^2.0.0",
     "sharp": "^0.32.6",
     "uuid": "^9.0.1",
-    "validator": "^13.11.0", 
-    "resend": "^2.0.0"
+    "validator": "^13.11.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
