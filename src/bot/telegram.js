@@ -616,19 +616,23 @@ async function handleCallbackQuery(query) {
         '_(génération visuels + produit, ~2-3 min)_',
         { parse_mode: 'Markdown' }
       );
-      const result = await createClubShopifyPage(data, selectedLogo.url);
-      if (result.success) {
-        await updateLogoStatus(row, result.productUrl);
-        await bot.sendMessage(chatId,
-          '✅ *' + data.club + '* page créée !\n\n' +
-          '🔗 [Voir la page](' + result.productUrl + ')',
-          { parse_mode: 'Markdown' }
-        );
-      } else {
-        await bot.sendMessage(chatId, '❌ Erreur création: ' + result.error);
-      }
+   // Lancer la création en arrière-plan (sans attendre)
+      createClubShopifyPage(data, selectedLogo.url).then(function(result) {
+        if (result.success) {
+          updateLogoStatus(row, result.productUrl);
+          bot.sendMessage(chatId,
+            '✅ *' + data.club + '* page créée !\n\n' +
+            '🔗 [Voir la page](' + result.productUrl + ')',
+            { parse_mode: 'Markdown' }
+          );
+        } else {
+          bot.sendMessage(chatId, '❌ Erreur création: ' + result.error);
+        }
+      });
+      
+      // Continuer immédiatement avec le prochain logo
       userState.delete(chatId);
-      setTimeout(function() { sendNextLogo(chatId); }, 1000);
+      setTimeout(function() { sendNextLogo(chatId); }, 500);
     }
   }
 }
