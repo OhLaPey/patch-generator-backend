@@ -612,7 +612,7 @@ function setupBotCommands() {
     );
   });
 
-  bot.onText(/\/next/, async function(msg) {
+  bot.onText(/\/mail/, async function(msg) {
     const chatId = msg.chat.id;
     if (!isAuthorized(chatId)) return;
     await sendNextEmail(chatId);
