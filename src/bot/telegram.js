@@ -1,7 +1,8 @@
 /**
- * PPATCH - Bot Telegram Unifié v5.1
- * - 6 images Google (requêtes simplifiées)
- * - Pré-chargement 5 clubs d'avance
+ * PPATCH - Bot Telegram Unifié v5.2
+ * - 6 images Google
+ * - Pré-chargement 5 clubs
+ * - Commande /sync pour vérifier les produits Shopify
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -30,7 +31,6 @@ let sheet = null;
 let CONFIG = null;
 const userState = new Map();
 
-// Cache pour pré-chargement des clubs
 const clubCache = [];
 const CACHE_SIZE = 5;
 let isCacheLoading = false;
@@ -113,7 +113,6 @@ async function searchLogoGoogle(clubName, sport, targetCount) {
   const validLogos = [];
   const seenUrls = new Set();
   
-  // Requêtes simplifiées (plus proches de la recherche navigateur)
   const queries = [
     clubName + ' ' + (sport || '') + ' logo',
     clubName + ' logo png'
@@ -131,7 +130,6 @@ async function searchLogoGoogle(clubName, sport, targetCount) {
         for (let i = 0; i < res.data.items.length && validLogos.length < targetCount; i++) {
           const item = res.data.items[i];
           
-          // Éviter les doublons
           if (seenUrls.has(item.link)) continue;
           seenUrls.add(item.link);
           
@@ -156,7 +154,6 @@ async function searchLogoGoogle(clubName, sport, targetCount) {
 async function findAllLogos(clubName, besportLogo, sport) {
   const logos = [];
   
-  // 1. Logo BeSport
   if (besportLogo && besportLogo.startsWith('http')) {
     const isValid = await isValidImageUrl(besportLogo);
     if (isValid) {
@@ -164,13 +161,11 @@ async function findAllLogos(clubName, besportLogo, sport) {
     }
   }
   
-  // 2. Wikipedia
   const wikiLogo = await searchLogoWikipedia(clubName);
   if (wikiLogo) {
     logos.push({ source: 'Wikipedia', url: wikiLogo, emoji: '📚' });
   }
   
-  // 3. Google Images - 6 images
   const googleLogos = await searchLogoGoogle(clubName, sport, 6);
   googleLogos.forEach(function(logo, index) {
     logos.push({ source: 'Google ' + (index + 1), url: logo.url, emoji: '🔍' });
@@ -276,6 +271,85 @@ async function getNextClubFromCache() {
     data: clubInfo.data,
     logos: logos
   };
+}
+
+// ============ SYNC SHOPIFY ============
+
+async function checkProductExists(handle) {
+  if (!CONFIG.shopifyStore || !CONFIG.shopifyAccessToken) {
+    return false;
+  }
+  try {
+    const response = await fetch(
+      'https://' + CONFIG.shopifyStore + '/admin/api/2024-01/products.json?handle=' + handle,
+      {
+        headers: {
+          'X-Shopify-Access-Token': CONFIG.shopifyAccessToken,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    if (response.ok) {
+      const data = await response.json();
+      return data.products && data.products.length > 0;
+    }
+    return false;
+  } catch (error) {
+    console.error('❌ Erreur vérification Shopify: ' + error.message);
+    return false;
+  }
+}
+
+async function syncShopifyProducts(chatId) {
+  await bot.sendMessage(chatId, '🔄 *Synchronisation en cours...*\nVérification des produits Shopify...', { parse_mode: 'Markdown' });
+  
+  const rows = await sheet.getRows();
+  let checkedCount = 0;
+  let deletedCount = 0;
+  let errorCount = 0;
+  
+  for (const row of rows) {
+    const statutShopify = row.get('Statut_Shopify');
+    
+    // Vérifier seulement les lignes avec une URL Shopify
+    if (statutShopify && statutShopify.startsWith('http')) {
+      checkedCount++;
+      
+      // Extraire le handle depuis l'URL
+      const match = statutShopify.match(/\/products\/([^\/\?]+)/);
+      if (match) {
+        const handle = match[1];
+        
+        try {
+          const exists = await checkProductExists(handle);
+          
+          if (!exists) {
+            const clubName = row.get('Club') || row.get('Nom_Court');
+            console.log('🗑️ Produit supprimé détecté: ' + clubName);
+            
+            row.set('Statut_Shopify', 'deleted_from_shopify');
+            await row.save();
+            deletedCount++;
+          }
+        } catch (error) {
+          errorCount++;
+        }
+      }
+      
+      // Envoyer un update tous les 20 produits
+      if (checkedCount % 20 === 0) {
+        await bot.sendMessage(chatId, '⏳ ' + checkedCount + ' produits vérifiés...', { parse_mode: 'Markdown' });
+      }
+    }
+  }
+  
+  await bot.sendMessage(chatId,
+    '✅ *Synchronisation terminée !*\n\n' +
+    '📊 Produits vérifiés: ' + checkedCount + '\n' +
+    '🗑️ Suppressions détectées: ' + deletedCount + '\n' +
+    (errorCount > 0 ? '⚠️ Erreurs: ' + errorCount : ''),
+    { parse_mode: 'Markdown' }
+  );
 }
 
 // ============ EMAILS ============
@@ -457,7 +531,7 @@ function getGoogleImagesLink(clubName, sport) {
 async function getStats() {
   const rows = await sheet.getRows();
   let totalEmail = 0, pendingEmail = 0, sentEmail = 0, invalidEmail = 0;
-  let totalLogo = 0, pendingLogo = 0, createdLogo = 0, rejectedLogo = 0;
+  let totalLogo = 0, pendingLogo = 0, createdLogo = 0, rejectedLogo = 0, deletedLogo = 0;
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const shopifyUrl = row.get('Statut_Shopify');
@@ -476,12 +550,14 @@ async function getStats() {
         createdLogo++;
       } else if (shopifyUrl === 'rejected') {
         rejectedLogo++;
+      } else if (shopifyUrl === 'deleted_from_shopify') {
+        deletedLogo++;
       } else {
         pendingLogo++;
       }
     }
   }
-  return { totalEmail, pendingEmail, sentEmail, invalidEmail, totalLogo, pendingLogo, createdLogo, rejectedLogo };
+  return { totalEmail, pendingEmail, sentEmail, invalidEmail, totalLogo, pendingLogo, createdLogo, rejectedLogo, deletedLogo };
 }
 
 function setupBotCommands() {
@@ -492,18 +568,20 @@ function setupBotCommands() {
     }
     const stats = await getStats();
     bot.sendMessage(chatId,
-      '🎯 *PPATCH - Bot Unifié v5.1*\n\n' +
+      '🎯 *PPATCH - Bot Unifié v5.2*\n\n' +
       '📧 *Emails:*\n' +
       '• À valider: ' + stats.pendingEmail + '\n' +
       '• Envoyés: ' + stats.sentEmail + '\n\n' +
       '🖼️ *Logos:*\n' +
       '• À valider: ' + stats.pendingLogo + '\n' +
       '• Pages créées: ' + stats.createdLogo + '\n' +
-      '• Rejetés: ' + stats.rejectedLogo + '\n\n' +
+      '• Rejetés: ' + stats.rejectedLogo + '\n' +
+      '• Supprimés Shopify: ' + stats.deletedLogo + '\n\n' +
       '📦 *Cache:* ' + clubCache.length + ' clubs pré-chargés\n\n' +
       '*Commandes:*\n' +
       '/next - Valider emails\n' +
       '/logo - Valider logos + créer pages\n' +
+      '/sync - Synchroniser avec Shopify\n' +
       '/stats - Statistiques\n' +
       '/help - Aide',
       { parse_mode: 'Markdown' }
@@ -527,7 +605,8 @@ function setupBotCommands() {
       '• Total avec logo: ' + stats.totalLogo + '\n' +
       '• À valider: ' + stats.pendingLogo + '\n' +
       '• Pages créées: ' + stats.createdLogo + '\n' +
-      '• Rejetés: ' + stats.rejectedLogo + '\n\n' +
+      '• Rejetés: ' + stats.rejectedLogo + '\n' +
+      '• Supprimés Shopify: ' + stats.deletedLogo + '\n\n' +
       '📦 *Cache:* ' + clubCache.length + ' clubs pré-chargés',
       { parse_mode: 'Markdown' }
     );
@@ -545,6 +624,12 @@ function setupBotCommands() {
     await sendNextLogo(chatId);
   });
 
+  bot.onText(/\/sync/, async function(msg) {
+    const chatId = msg.chat.id;
+    if (!isAuthorized(chatId)) return;
+    await syncShopifyProducts(chatId);
+  });
+
   bot.onText(/\/help/, function(msg) {
     const chatId = msg.chat.id;
     bot.sendMessage(chatId,
@@ -555,10 +640,8 @@ function setupBotCommands() {
       '1. Recherche logos sur BeSport, Wikipedia, Google\n' +
       '2. Tu choisis le meilleur logo\n' +
       '3. Création automatique de la page Shopify\n\n' +
-      '*Nouveautés v5.1:*\n' +
-      '• 6 images Google\n' +
-      '• Recherche simplifiée (meilleurs résultats)\n' +
-      '• Pré-chargement 5 clubs\n\n' +
+      '*Synchronisation (/sync):*\n' +
+      'Vérifie tous les produits Shopify et met à jour le Sheet si des produits ont été supprimés.\n\n' +
       '*Actions logos:*\n' +
       '🅱️ 📚 🔍 → Choisir cette source\n' +
       '❌ Rejeter → Marque comme rejeté\n' +
@@ -838,7 +921,7 @@ export async function startTelegramBot() {
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.1 redémarré !\n\n📦 Pré-chargement de 5 clubs en cours...\n\n/logo pour valider les logos');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.2 redémarré !\n\n📦 Pré-chargement de 5 clubs en cours...\n\n/logo pour valider les logos\n/sync pour synchroniser avec Shopify');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
