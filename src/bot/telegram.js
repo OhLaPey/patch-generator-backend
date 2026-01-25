@@ -1,7 +1,6 @@
 /**
- * PPATCH - Bot Telegram Unifié v5
- * - 6 images Google
- * - Recherche PNG HD prioritaire
+ * PPATCH - Bot Telegram Unifié v5.1
+ * - 6 images Google (requêtes simplifiées)
  * - Pré-chargement 5 clubs d'avance
  */
 
@@ -114,18 +113,17 @@ async function searchLogoGoogle(clubName, sport, targetCount) {
   const validLogos = [];
   const seenUrls = new Set();
   
-  // Requêtes de recherche optimisées (PNG HD en priorité)
+  // Requêtes simplifiées (plus proches de la recherche navigateur)
   const queries = [
-    clubName + ' ' + (sport || '') + ' logo png transparent HD',
-    clubName + ' ' + (sport || '') + ' logo officiel',
-    clubName + ' blason écusson png'
+    clubName + ' ' + (sport || '') + ' logo',
+    clubName + ' logo png'
   ];
   
   for (let q = 0; q < queries.length && validLogos.length < targetCount; q++) {
     try {
       const query = queries[q].trim().replace(/\s+/g, ' ');
       const numToFetch = Math.min(10, (targetCount - validLogos.length) + 3);
-      const url = 'https://www.googleapis.com/customsearch/v1?key=' + CONFIG.googleApiKey + '&cx=' + CONFIG.googleCx + '&q=' + encodeURIComponent(query) + '&searchType=image&num=' + numToFetch + '&imgType=photo&imgSize=large';
+      const url = 'https://www.googleapis.com/customsearch/v1?key=' + CONFIG.googleApiKey + '&cx=' + CONFIG.googleCx + '&q=' + encodeURIComponent(query) + '&searchType=image&num=' + numToFetch;
       
       const res = await axios.get(url, { timeout: 10000 });
       
@@ -172,7 +170,7 @@ async function findAllLogos(clubName, besportLogo, sport) {
     logos.push({ source: 'Wikipedia', url: wikiLogo, emoji: '📚' });
   }
   
-  // 3. Google Images - 6 images HD
+  // 3. Google Images - 6 images
   const googleLogos = await searchLogoGoogle(clubName, sport, 6);
   googleLogos.forEach(function(logo, index) {
     logos.push({ source: 'Google ' + (index + 1), url: logo.url, emoji: '🔍' });
@@ -222,18 +220,15 @@ async function preloadClubLogos() {
   isCacheLoading = true;
   
   try {
-    // Charger les prochains clubs si le cache est bas
     while (clubCache.length < CACHE_SIZE) {
       const clubs = await getNextClubsForLogo(CACHE_SIZE - clubCache.length + 2);
       
       if (clubs.length === 0) break;
       
       for (const clubInfo of clubs) {
-        // Vérifier si déjà en cache
         const alreadyCached = clubCache.some(c => c.data.rowIndex === clubInfo.data.rowIndex);
         if (alreadyCached) continue;
         
-        // Charger les logos
         console.log('📦 Pré-chargement: ' + clubInfo.data.club);
         const logos = await findAllLogos(clubInfo.data.club, clubInfo.data.logo, clubInfo.data.sport);
         
@@ -246,7 +241,6 @@ async function preloadClubLogos() {
         if (clubCache.length >= CACHE_SIZE) break;
       }
       
-      // Éviter boucle infinie
       break;
     }
     
@@ -259,28 +253,22 @@ async function preloadClubLogos() {
 }
 
 async function getNextClubFromCache() {
-  // Chercher dans le cache d'abord
   while (clubCache.length > 0) {
     const cached = clubCache.shift();
-    
-    // Vérifier que le club n'a pas été traité entre-temps
     const currentStatus = cached.row.get('Statut_Shopify');
     
     if (!currentStatus || currentStatus.trim() === '') {
-      // Relancer le pré-chargement en arrière-plan
       setTimeout(preloadClubLogos, 100);
       return cached;
     }
   }
   
-  // Cache vide, charger directement
   const clubs = await getNextClubsForLogo(1);
   if (clubs.length === 0) return null;
   
   const clubInfo = clubs[0];
   const logos = await findAllLogos(clubInfo.data.club, clubInfo.data.logo, clubInfo.data.sport);
   
-  // Relancer le pré-chargement en arrière-plan
   setTimeout(preloadClubLogos, 100);
   
   return {
@@ -504,7 +492,7 @@ function setupBotCommands() {
     }
     const stats = await getStats();
     bot.sendMessage(chatId,
-      '🎯 *PPATCH - Bot Unifié v5*\n\n' +
+      '🎯 *PPATCH - Bot Unifié v5.1*\n\n' +
       '📧 *Emails:*\n' +
       '• À valider: ' + stats.pendingEmail + '\n' +
       '• Envoyés: ' + stats.sentEmail + '\n\n' +
@@ -521,7 +509,6 @@ function setupBotCommands() {
       { parse_mode: 'Markdown' }
     );
     
-    // Lancer le pré-chargement
     preloadClubLogos();
   });
 
@@ -565,12 +552,12 @@ function setupBotCommands() {
       '*Validation Emails (/next):*\n' +
       'Valide les emails des clubs qui ont déjà une page Shopify.\n\n' +
       '*Validation Logos (/logo):*\n' +
-      '1. Recherche logos sur BeSport, Wikipedia, Google HD\n' +
+      '1. Recherche logos sur BeSport, Wikipedia, Google\n' +
       '2. Tu choisis le meilleur logo\n' +
       '3. Création automatique de la page Shopify\n\n' +
-      '*Nouveautés v5:*\n' +
-      '• 6 images Google (au lieu de 3)\n' +
-      '• Recherche PNG HD prioritaire\n' +
+      '*Nouveautés v5.1:*\n' +
+      '• 6 images Google\n' +
+      '• Recherche simplifiée (meilleurs résultats)\n' +
       '• Pré-chargement 5 clubs\n\n' +
       '*Actions logos:*\n' +
       '🅱️ 📚 🔍 → Choisir cette source\n' +
@@ -620,12 +607,10 @@ async function sendNextEmail(chatId) {
 }
 
 async function sendNextLogo(chatId) {
-  // Afficher message de chargement
   const loadingMsg = await bot.sendMessage(chatId, '🔍 Chargement...');
   
   const cached = await getNextClubFromCache();
   
-  // Supprimer le message de chargement
   try {
     await bot.deleteMessage(chatId, loadingMsg.message_id);
   } catch (e) {}
@@ -659,7 +644,6 @@ async function sendNextLogo(chatId) {
     );
   }
   
-  // Envoyer les images
   for (let i = 0; i < logos.length; i++) {
     const logo = logos[i];
     try {
@@ -672,7 +656,6 @@ async function sendNextLogo(chatId) {
     }
   }
   
-  // Boutons
   const logoButtons = logos.map(function(logo, index) {
     return {
       text: logo.emoji + ' ' + logo.source,
@@ -851,12 +834,11 @@ export async function startTelegramBot() {
     setupBotCommands();
     console.log('✅ Bot Telegram démarré');
     
-    // Lancer le pré-chargement au démarrage
     preloadClubLogos();
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5 redémarré !\n\n📦 Pré-chargement de 5 clubs en cours...\n\n/logo pour valider les logos');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.1 redémarré !\n\n📦 Pré-chargement de 5 clubs en cours...\n\n/logo pour valider les logos');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
