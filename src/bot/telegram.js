@@ -1,8 +1,9 @@
 /**
- * PPATCH - Bot Telegram Unifié v5.2
- * - 6 images Google
- * - Pré-chargement 5 clubs
- * - Commande /sync pour vérifier les produits Shopify
+ * PPATCH - Bot Telegram Unifié v5.3
+ * - /logo : Valider logos + créer pages
+ * - /mail : Valider emails
+ * - /sync : Synchroniser avec Shopify
+ * - /stats : Statistiques
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -311,11 +312,9 @@ async function syncShopifyProducts(chatId) {
   for (const row of rows) {
     const statutShopify = row.get('Statut_Shopify');
     
-    // Vérifier seulement les lignes avec une URL Shopify
     if (statutShopify && statutShopify.startsWith('http')) {
       checkedCount++;
       
-      // Extraire le handle depuis l'URL
       const match = statutShopify.match(/\/products\/([^\/\?]+)/);
       if (match) {
         const handle = match[1];
@@ -336,7 +335,6 @@ async function syncShopifyProducts(chatId) {
         }
       }
       
-      // Envoyer un update tous les 20 produits
       if (checkedCount % 20 === 0) {
         await bot.sendMessage(chatId, '⏳ ' + checkedCount + ' produits vérifiés...', { parse_mode: 'Markdown' });
       }
@@ -568,25 +566,12 @@ function setupBotCommands() {
     }
     const stats = await getStats();
     bot.sendMessage(chatId,
-      '🎯 *PPATCH - Bot Unifié v5.2*\n\n' +
-      '📧 *Emails:*\n' +
-      '• À valider: ' + stats.pendingEmail + '\n' +
-      '• Envoyés: ' + stats.sentEmail + '\n\n' +
-      '🖼️ *Logos:*\n' +
-      '• À valider: ' + stats.pendingLogo + '\n' +
-      '• Pages créées: ' + stats.createdLogo + '\n' +
-      '• Rejetés: ' + stats.rejectedLogo + '\n' +
-      '• Supprimés Shopify: ' + stats.deletedLogo + '\n\n' +
-      '📦 *Cache:* ' + clubCache.length + ' clubs pré-chargés\n\n' +
-      '*Commandes:*\n' +
-      '/next - Valider emails\n' +
-      '/logo - Valider logos + créer pages\n' +
-      '/sync - Synchroniser avec Shopify\n' +
-      '/stats - Statistiques\n' +
-      '/help - Aide',
+      '🎯 *PPATCH Bot v5.3*\n\n' +
+      '🖼️ *Logos:* ' + stats.pendingLogo + ' à valider | ' + stats.createdLogo + ' créés\n' +
+      '📧 *Emails:* ' + stats.pendingEmail + ' à valider | ' + stats.sentEmail + ' envoyés\n\n' +
+      '📦 Cache: ' + clubCache.length + ' clubs pré-chargés',
       { parse_mode: 'Markdown' }
     );
-    
     preloadClubLogos();
   });
 
@@ -596,18 +581,16 @@ function setupBotCommands() {
     const stats = await getStats();
     bot.sendMessage(chatId,
       '📊 *Statistiques*\n\n' +
-      '📧 *Emails:*\n' +
-      '• Total avec page: ' + stats.totalEmail + '\n' +
-      '• À valider: ' + stats.pendingEmail + '\n' +
-      '• Envoyés Brevo: ' + stats.sentEmail + '\n' +
-      '• Invalides: ' + stats.invalidEmail + '\n\n' +
       '🖼️ *Logos:*\n' +
-      '• Total avec logo: ' + stats.totalLogo + '\n' +
       '• À valider: ' + stats.pendingLogo + '\n' +
       '• Pages créées: ' + stats.createdLogo + '\n' +
       '• Rejetés: ' + stats.rejectedLogo + '\n' +
-      '• Supprimés Shopify: ' + stats.deletedLogo + '\n\n' +
-      '📦 *Cache:* ' + clubCache.length + ' clubs pré-chargés',
+      '• Supprimés: ' + stats.deletedLogo + '\n\n' +
+      '📧 *Emails:*\n' +
+      '• À valider: ' + stats.pendingEmail + '\n' +
+      '• Envoyés: ' + stats.sentEmail + '\n' +
+      '• Invalides: ' + stats.invalidEmail + '\n\n' +
+      '📦 Cache: ' + clubCache.length + ' clubs',
       { parse_mode: 'Markdown' }
     );
   });
@@ -628,26 +611,6 @@ function setupBotCommands() {
     const chatId = msg.chat.id;
     if (!isAuthorized(chatId)) return;
     await syncShopifyProducts(chatId);
-  });
-
-  bot.onText(/\/help/, function(msg) {
-    const chatId = msg.chat.id;
-    bot.sendMessage(chatId,
-      '📖 *Aide*\n\n' +
-      '*Validation Emails (/next):*\n' +
-      'Valide les emails des clubs qui ont déjà une page Shopify.\n\n' +
-      '*Validation Logos (/logo):*\n' +
-      '1. Recherche logos sur BeSport, Wikipedia, Google\n' +
-      '2. Tu choisis le meilleur logo\n' +
-      '3. Création automatique de la page Shopify\n\n' +
-      '*Synchronisation (/sync):*\n' +
-      'Vérifie tous les produits Shopify et met à jour le Sheet si des produits ont été supprimés.\n\n' +
-      '*Actions logos:*\n' +
-      '🅱️ 📚 🔍 → Choisir cette source\n' +
-      '❌ Rejeter → Marque comme rejeté\n' +
-      '⏭️ Passer → Passe sans rien faire',
-      { parse_mode: 'Markdown' }
-    );
   });
 
   bot.on('callback_query', handleCallbackQuery);
@@ -773,7 +736,7 @@ async function handleCallbackQuery(query) {
 
   if (action.startsWith('email_')) {
     if (!state || state.mode !== 'email') {
-      return bot.answerCallbackQuery(query.id, { text: '❌ Tapez /next d\'abord' });
+      return bot.answerCallbackQuery(query.id, { text: '❌ Tapez /mail d\'abord' });
     }
     const row = state.row;
     const data = state.data;
@@ -921,7 +884,7 @@ export async function startTelegramBot() {
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.2 redémarré !\n\n📦 Pré-chargement de 5 clubs en cours...\n\n/logo pour valider les logos\n/sync pour synchroniser avec Shopify');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.3 redémarré !');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
