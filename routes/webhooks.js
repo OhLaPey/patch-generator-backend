@@ -1,29 +1,7 @@
 import express from 'express';
-import { handleOrderPaid, testWebhook } from '../controllers/webhookController.js';
+import { handleOrderPaid, handleProductDelete, testWebhook } from '../controllers/webhookController.js';
 
 const router = express.Router();
-
-/**
- * Middleware pour capturer le body brut (nécessaire pour la vérification HMAC)
- */
-const captureRawBody = (req, res, next) => {
-  let data = '';
-  req.setEncoding('utf8');
-  
-  req.on('data', chunk => {
-    data += chunk;
-  });
-  
-  req.on('end', () => {
-    req.rawBody = data;
-    try {
-      req.body = JSON.parse(data);
-    } catch (e) {
-      req.body = {};
-    }
-    next();
-  });
-};
 
 /**
  * POST /api/webhooks/shopify/order-paid
@@ -36,9 +14,18 @@ router.post('/shopify/order-paid', express.json({
 }), handleOrderPaid);
 
 /**
+ * POST /api/webhooks/shopify/product-delete
+ * Webhook Shopify déclenché quand un produit est supprimé
+ */
+router.post('/shopify/product-delete', express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf.toString();
+  }
+}), handleProductDelete);
+
+/**
  * POST /api/webhooks/test
  * Endpoint pour tester le système de vectorisation/email manuellement
- * Body: { "patch_id": "patch_xxx" }
  */
 router.post('/test', express.json(), testWebhook);
 
