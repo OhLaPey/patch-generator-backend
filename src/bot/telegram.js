@@ -1,9 +1,10 @@
 /**
- * PPATCH - Bot Telegram Unifié v3
+ * PPATCH - Bot Telegram Unifié v4
  * - Validation Emails (/next)
  * - Validation Logos multi-sources (/logo)
  * - Recherche Google avec sport
- * - Validation URLs images
+ * - Validation URLs images + compensation
+ * - Compteur API Google
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -31,6 +32,24 @@ let doc = null;
 let sheet = null;
 let CONFIG = null;
 const userState = new Map();
+
+// Compteur API Google (reset à minuit UTC)
+let googleApiCount = 0;
+let googleApiResetDate = new Date().toDateString();
+
+function checkAndResetApiCounter() {
+  const today = new Date().toDateString();
+  if (today !== googleApiResetDate) {
+    googleApiCount = 0;
+    googleApiResetDate = today;
+    console.log('🔄 Compteur API Google réinitialisé');
+  }
+}
+
+function getApiRemaining() {
+  checkAndResetApiCounter();
+  return Math.max(0, 100 - googleApiCount);
+}
 
 async function initGoogleSheets() {
   const auth = new JWT({
@@ -101,39 +120,64 @@ async function searchLogoWikipedia(clubName) {
   }
 }
 
-async function searchLogoGoogle(clubName, sport, numResults) {
-  numResults = numResults || 3;
+async function searchLogoGoogle(clubName, sport, targetCount) {
+  targetCount = targetCount || 3;
   if (!CONFIG.googleApiKey || !CONFIG.googleCx) {
     return [];
   }
-  try {
-    // Ajouter le sport à la recherche si disponible
-    let query = clubName + ' logo png';
-    if (sport) {
-      query = clubName + ' ' + sport + ' logo png';
-    }
-    const url = 'https://www.googleapis.com/customsearch/v1?key=' + CONFIG.googleApiKey + '&cx=' + CONFIG.googleCx + '&q=' + encodeURIComponent(query) + '&searchType=image&num=' + numResults;
-    const res = await axios.get(url, { timeout: 10000 });
-    if (res.data.items?.length > 0) {
-      const validLogos = [];
-      for (let i = 0; i < res.data.items.length; i++) {
-        const item = res.data.items[i];
-        const isValid = await isValidImageUrl(item.link);
-        if (isValid) {
-          validLogos.push({
-            url: item.link,
-            title: item.title,
-            thumbnail: item.image?.thumbnailLink
-          });
-        }
-      }
-      return validLogos;
-    }
-    return [];
-  } catch (error) {
-    console.log('⚠️ Google error for ' + clubName + ': ' + error.message);
+  
+  checkAndResetApiCounter();
+  
+  // Vérifier s'il reste des requêtes
+  if (googleApiCount >= 100) {
+    console.log('⚠️ Quota API Google atteint (100/jour)');
     return [];
   }
+  
+  const validLogos = [];
+  let start = 1;
+  const maxAttempts = 3; // Maximum 3 requêtes API par recherche
+  let attempts = 0;
+  
+  while (validLogos.length < targetCount && attempts < maxAttempts && googleApiCount < 100) {
+    try {
+      let query = clubName + ' logo png';
+      if (sport) {
+        query = clubName + ' ' + sport + ' logo png';
+      }
+      
+      const numToFetch = Math.min(10, (targetCount - validLogos.length) + 5); // Chercher un peu plus pour compenser
+      const url = 'https://www.googleapis.com/customsearch/v1?key=' + CONFIG.googleApiKey + '&cx=' + CONFIG.googleCx + '&q=' + encodeURIComponent(query) + '&searchType=image&num=' + numToFetch + '&start=' + start;
+      
+      const res = await axios.get(url, { timeout: 10000 });
+      googleApiCount++;
+      attempts++;
+      
+      console.log('🔍 API Google requête #' + googleApiCount + ' (reste: ' + (100 - googleApiCount) + ')');
+      
+      if (res.data.items?.length > 0) {
+        for (let i = 0; i < res.data.items.length && validLogos.length < targetCount; i++) {
+          const item = res.data.items[i];
+          const isValid = await isValidImageUrl(item.link);
+          if (isValid) {
+            validLogos.push({
+              url: item.link,
+              title: item.title,
+              thumbnail: item.image?.thumbnailLink
+            });
+          }
+        }
+        start += res.data.items.length;
+      } else {
+        break; // Plus de résultats
+      }
+    } catch (error) {
+      console.log('⚠️ Google error for ' + clubName + ': ' + error.message);
+      break;
+    }
+  }
+  
+  return validLogos;
 }
 
 async function findAllLogos(clubName, besportLogo, sport) {
@@ -153,7 +197,7 @@ async function findAllLogos(clubName, besportLogo, sport) {
     logos.push({ source: 'Wikipedia', url: wikiLogo, emoji: '📚' });
   }
   
-  // 3. Google Images (avec sport)
+  // 3. Google Images (avec sport) - chercher 3 images valides
   const googleLogos = await searchLogoGoogle(clubName, sport, 3);
   googleLogos.forEach(function(logo, index) {
     logos.push({ source: 'Google ' + (index + 1), url: logo.url, emoji: '🔍' });
@@ -404,7 +448,7 @@ function setupBotCommands() {
     }
     const stats = await getStats();
     bot.sendMessage(chatId,
-      '🎯 *PPATCH - Bot Unifié v3*\n\n' +
+      '🎯 *PPATCH - Bot Unifié v4*\n\n' +
       '📧 *Emails:*\n' +
       '• À valider: ' + stats.pendingEmail + '\n' +
       '• Envoyés: ' + stats.sentEmail + '\n\n' +
@@ -412,6 +456,7 @@ function setupBotCommands() {
       '• À valider: ' + stats.pendingLogo + '\n' +
       '• Pages créées: ' + stats.createdLogo + '\n' +
       '• Rejetés: ' + stats.rejectedLogo + '\n\n' +
+      '🔢 *API Google:* ' + getApiRemaining() + '/100 restantes\n\n' +
       '*Commandes:*\n' +
       '/next - Valider emails\n' +
       '/logo - Valider logos + créer pages\n' +
@@ -436,7 +481,8 @@ function setupBotCommands() {
       '• Total avec logo: ' + stats.totalLogo + '\n' +
       '• À valider: ' + stats.pendingLogo + '\n' +
       '• Pages créées: ' + stats.createdLogo + '\n' +
-      '• Rejetés: ' + stats.rejectedLogo,
+      '• Rejetés: ' + stats.rejectedLogo + '\n\n' +
+      '🔢 *API Google:* ' + getApiRemaining() + '/100 restantes aujourd\'hui',
       { parse_mode: 'Markdown' }
     );
   });
@@ -466,7 +512,8 @@ function setupBotCommands() {
       '*Actions logos:*\n' +
       '🅱️ 📚 🔍 → Choisir cette source\n' +
       '❌ Rejeter → Marque comme rejeté\n' +
-      '⏭️ Passer → Passe sans rien faire',
+      '⏭️ Passer → Passe sans rien faire\n\n' +
+      '🔢 *API Google:* ' + getApiRemaining() + '/100 restantes',
       { parse_mode: 'Markdown' }
     );
   });
@@ -520,7 +567,6 @@ async function sendNextLogo(chatId) {
   const data = result.data;
   await bot.sendMessage(chatId, '🔎 Recherche logos pour *' + data.club + '* (' + (data.sport || 'sport inconnu') + ')...', { parse_mode: 'Markdown' });
   
-  // Passer le sport à la recherche
   const logos = await findAllLogos(data.club, data.logo, data.sport);
   userState.set(chatId, { mode: 'logo', row: row, data: data, logos: logos });
   
@@ -537,7 +583,8 @@ async function sendNextLogo(chatId) {
       '🏆 *' + data.club + '*\n' +
       '⚽ ' + (data.sport || '-') + ' | 📍 ' + (data.ville || '-') + '\n\n' +
       '❌ *Aucun logo valide trouvé*\n\n' +
-      '🔍 [Chercher manuellement](' + getGoogleImagesLink(data.club, data.sport) + ')',
+      '🔍 [Chercher manuellement](' + getGoogleImagesLink(data.club, data.sport) + ')\n\n' +
+      '🔢 API Google: ' + getApiRemaining() + '/100 restantes',
       { parse_mode: 'Markdown', reply_markup: keyboard }
     );
   }
@@ -573,7 +620,8 @@ async function sendNextLogo(chatId) {
     '🏆 *' + data.club + '*\n' +
     '⚽ ' + (data.sport || '-') + ' | 📍 ' + (data.ville || '-') + '\n\n' +
     '📸 *' + logos.length + ' logo(s) valide(s) trouvé(s)*\n\n' +
-    '👆 *Choisis le meilleur logo:*',
+    '👆 *Choisis le meilleur logo:*\n\n' +
+    '🔢 API Google: ' + getApiRemaining() + '/100 restantes',
     { parse_mode: 'Markdown', reply_markup: keyboard }
   );
 }
@@ -731,7 +779,7 @@ export async function startTelegramBot() {
     console.log('✅ Bot Telegram démarré');
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v3 redémarré !\n\n/logo pour valider les logos avec recherche améliorée (sport + validation URL)');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v4 redémarré !\n\n🔢 API Google: ' + getApiRemaining() + '/100 restantes\n\n/logo pour valider les logos');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
