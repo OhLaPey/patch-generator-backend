@@ -2,18 +2,18 @@ import crypto from 'crypto';
 import { Patch } from '../config/mongodb.js';
 import { vectorizeImage } from '../services/vectorizer.js';
 import { sendPatchEmail } from '../services/emailService.js';
+import { GoogleSpreadsheet } from 'google-spreadsheet';
+import { JWT } from 'google-auth-library';
 
 /**
  * Vérifier la signature du webhook Shopify (sécurité)
- * @param {Object} req - Request object
- * @returns {boolean}
  */
 const verifyShopifyWebhook = (req) => {
   const hmacHeader = req.headers['x-shopify-hmac-sha256'];
   
   if (!hmacHeader || !process.env.SHOPIFY_WEBHOOK_SECRET) {
     console.warn('⚠️  Webhook signature verification skipped (no secret configured)');
-    return true; // Skip verification si pas de secret configuré
+    return true;
   }
 
   const body = req.rawBody || JSON.stringify(req.body);
@@ -27,17 +27,12 @@ const verifyShopifyWebhook = (req) => {
 
 /**
  * Extraire le patch_id depuis les données de commande Shopify
- * @param {Object} orderData - Données de la commande Shopify
- * @returns {string|null} - patch_id ou null
  */
 const extractPatchIdFromOrder = (orderData) => {
-  // Méthode 1: Depuis le SKU des line items
   for (const item of orderData.line_items || []) {
     if (item.sku && item.sku.startsWith('patch_')) {
       return item.sku;
     }
-    
-    // Vérifier aussi dans les properties
     for (const prop of item.properties || []) {
       if (prop.name === 'patch_id' || prop.name === '_patch_id') {
         return prop.value;
@@ -45,14 +40,12 @@ const extractPatchIdFromOrder = (orderData) => {
     }
   }
 
-  // Méthode 2: Depuis les note_attributes de la commande
   for (const attr of orderData.note_attributes || []) {
     if (attr.name === 'patch_id') {
       return attr.value;
     }
   }
 
-  // Méthode 3: Depuis les tags
   if (orderData.tags) {
     const tags = orderData.tags.split(',').map(t => t.trim());
     const patchTag = tags.find(t => t.startsWith('patch_'));
@@ -64,8 +57,6 @@ const extractPatchIdFromOrder = (orderData) => {
 
 /**
  * Télécharger une image depuis une URL
- * @param {string} url - URL de l'image
- * @returns {Promise<Buffer>}
  */
 const downloadImage = async (url) => {
   const response = await fetch(url);
@@ -77,9 +68,7 @@ const downloadImage = async (url) => {
 };
 
 /**
- * Envoyer un événement à Brevo pour déclencher l'automation
- * @param {string} email - Email du client
- * @param {Object} eventData - Données de l'événement
+ * Envoyer un événement à Brevo
  */
 const sendBrevoEvent = async (email, eventData) => {
   if (!process.env.BREVO_API_KEY) {
@@ -116,7 +105,22 @@ const sendBrevoEvent = async (email, eventData) => {
 };
 
 /**
- * Handler principal pour le webhook orders/paid
+ * Initialiser Google Sheets pour le webhook
+ */
+const getGoogleSheet = async () => {
+  const auth = new JWT({
+    email: process.env.GOOGLE_CLIENT_EMAIL,
+    key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+  });
+  
+  const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID, auth);
+  await doc.loadInfo();
+  return doc.sheetsByTitle['Exploitables'];
+};
+
+/**
+ * Handler pour le webhook orders/paid
  */
 export const handleOrderPaid = async (req, res) => {
   console.log('\n' + '='.repeat(60));
@@ -124,7 +128,6 @@ export const handleOrderPaid = async (req, res) => {
   console.log('='.repeat(60));
 
   try {
-    // 1. Vérifier la signature Shopify
     if (!verifyShopifyWebhook(req)) {
       console.error('❌ Invalid webhook signature');
       return res.status(401).json({ error: 'Invalid signature' });
@@ -140,7 +143,6 @@ export const handleOrderPaid = async (req, res) => {
       line_items_count: orderData.line_items?.length || 0
     });
 
-    // 2. Extraire le patch_id
     const patchId = extractPatchIdFromOrder(orderData);
 
     if (!patchId) {
@@ -153,7 +155,6 @@ export const handleOrderPaid = async (req, res) => {
 
     console.log(`🎯 Patch ID trouvé: ${patchId}`);
 
-    // 3. Récupérer le patch depuis MongoDB
     const patch = await Patch.findOne({ patch_id: patchId });
 
     if (!patch) {
@@ -172,7 +173,6 @@ export const handleOrderPaid = async (req, res) => {
       background_color: patch.background_color
     });
 
-    // 4. Marquer le patch comme acheté
     patch.purchased = true;
     patch.shopify_order_id = orderData.id.toString();
     patch.shopify_order_number = orderData.order_number;
@@ -181,7 +181,6 @@ export const handleOrderPaid = async (req, res) => {
 
     console.log('✅ Patch marqué comme acheté');
 
-    // 5. Télécharger le logo ORIGINAL pour vectorisation
     let originalLogoBuffer = null;
     if (patch.original_logo_url) {
       console.log('📥 Téléchargement du logo original...');
@@ -191,11 +190,8 @@ export const handleOrderPaid = async (req, res) => {
       } catch (downloadError) {
         console.error('❌ Erreur téléchargement logo original:', downloadError.message);
       }
-    } else {
-      console.warn('⚠️  Pas de logo original stocké pour ce patch');
     }
 
-    // 6. Télécharger l'image du PATCH FINAL pour l'email
     let patchImageBuffer = null;
     if (patch.generated_image_url) {
       console.log('📥 Téléchargement du rendu patch final...');
@@ -207,23 +203,17 @@ export const handleOrderPaid = async (req, res) => {
       }
     }
 
-    // 7. Vectoriser le LOGO ORIGINAL
     let svgResult = null;
     if (originalLogoBuffer) {
       console.log('🔄 Vectorisation du logo original...');
       try {
-        svgResult = await vectorizeImage(originalLogoBuffer, {
-          levels: 4
-        });
+        svgResult = await vectorizeImage(originalLogoBuffer, { levels: 4 });
         console.log(`✅ Vectorisation terminée: ${svgResult.layerCount} niveaux`);
       } catch (vectorError) {
         console.error('❌ Erreur vectorisation:', vectorError.message);
       }
-    } else {
-      console.warn('⚠️  Impossible de vectoriser - logo original non disponible');
     }
 
-    // 8. Préparer les données pour l'email interne (existant)
     const shippingAddress = orderData.shipping_address || orderData.billing_address;
     
     const emailOrderData = {
@@ -243,31 +233,25 @@ export const handleOrderPaid = async (req, res) => {
       totalPrice: orderData.total_price
     };
 
-    // Email interne contient: le PATCH FINAL (image) + le LOGO VECTORISÉ (SVG)
     const emailFiles = {
-      originalImage: patchImageBuffer,  // Le rendu du patch final
-      svgFile: svgResult?.svg ? Buffer.from(svgResult.svg, 'utf-8') : null  // Le logo vectorisé
+      originalImage: patchImageBuffer,
+      svgFile: svgResult?.svg ? Buffer.from(svgResult.svg, 'utf-8') : null
     };
 
-    // 9. Envoyer l'email interne (existant)
     console.log('📧 Envoi de l\'email interne...');
     try {
       await sendPatchEmail(emailOrderData, emailFiles);
       console.log('✅ Email interne envoyé avec succès!');
     } catch (emailError) {
       console.error('❌ Erreur envoi email interne:', emailError.message);
-      // Log mais ne pas faire échouer le webhook
     }
 
-    // 10. Mettre à jour le patch avec le statut de vectorisation
     patch.vectorized = !!svgResult;
     patch.vectorized_at = svgResult ? new Date() : null;
     patch.email_sent = true;
     patch.email_sent_at = new Date();
     await patch.save();
 
-    // 11. NOUVEAU: Envoyer l'événement Brevo pour déclencher l'automation client
-    // Uniquement si la vectorisation a réussi (condition dans Brevo: vectorized = true)
     const customerEmail = orderData.email || orderData.contact_email;
     if (customerEmail) {
       console.log('📤 Envoi événement Brevo...');
@@ -278,18 +262,15 @@ export const handleOrderPaid = async (req, res) => {
         customer_name: `${orderData.customer?.first_name || ''} ${orderData.customer?.last_name || ''}`.trim() || 'Client',
         total_price: orderData.total_price,
         patch_image_url: patch.generated_image_url || '',
-        vectorized: !!svgResult,  // true si vectorisation réussie, false sinon
+        vectorized: !!svgResult,
         order_date: orderData.created_at
       };
 
       const brevoSent = await sendBrevoEvent(customerEmail, brevoEventData);
       
-      // Mettre à jour le patch avec le statut Brevo
       patch.brevo_event_sent = brevoSent;
       patch.brevo_event_sent_at = brevoSent ? new Date() : null;
       await patch.save();
-    } else {
-      console.warn('⚠️  Pas d\'email client - événement Brevo non envoyé');
     }
 
     console.log('='.repeat(60));
@@ -307,8 +288,83 @@ export const handleOrderPaid = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Webhook handler error:', error);
-    
-    // Toujours répondre 200 pour éviter que Shopify retry en boucle
+    res.status(200).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Handler pour le webhook product/delete
+ * Met à jour le Google Sheet quand un produit est supprimé sur Shopify
+ */
+export const handleProductDelete = async (req, res) => {
+  console.log('\n' + '='.repeat(60));
+  console.log('🔔 WEBHOOK REÇU: products/delete');
+  console.log('='.repeat(60));
+
+  try {
+    if (!verifyShopifyWebhook(req)) {
+      console.error('❌ Invalid webhook signature');
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+
+    const productData = req.body;
+    const productId = productData.id;
+    const productHandle = productData.handle;
+    const productTitle = productData.title;
+
+    console.log('🗑️ Produit supprimé:', {
+      id: productId,
+      handle: productHandle,
+      title: productTitle
+    });
+
+    // Construire l'URL du produit pour chercher dans le Sheet
+    const shopName = process.env.SHOPIFY_SHOP_NAME;
+    const productUrl = `https://${shopName}/products/${productHandle}`;
+    const productUrlAlt = `https://ppatch.shop/products/${productHandle}`;
+
+    console.log('🔍 Recherche dans le Sheet pour:', productUrl);
+
+    // Accéder au Google Sheet
+    const sheet = await getGoogleSheet();
+    const rows = await sheet.getRows();
+
+    let updatedCount = 0;
+
+    for (const row of rows) {
+      const statutShopify = row.get('Statut_Shopify');
+      
+      // Vérifier si cette ligne correspond au produit supprimé
+      if (statutShopify && (
+        statutShopify.includes(productHandle) ||
+        statutShopify.includes(productId) ||
+        statutShopify === productUrl ||
+        statutShopify === productUrlAlt
+      )) {
+        const clubName = row.get('Club') || row.get('Nom_Court');
+        console.log(`📝 Mise à jour: ${clubName}`);
+        
+        row.set('Statut_Shopify', 'deleted_from_shopify');
+        await row.save();
+        updatedCount++;
+      }
+    }
+
+    console.log(`✅ ${updatedCount} ligne(s) mise(s) à jour dans le Sheet`);
+    console.log('='.repeat(60) + '\n');
+
+    res.status(200).json({
+      success: true,
+      product_id: productId,
+      product_handle: productHandle,
+      rows_updated: updatedCount
+    });
+
+  } catch (error) {
+    console.error('❌ Product delete webhook error:', error);
     res.status(200).json({
       success: false,
       error: error.message
@@ -330,7 +386,6 @@ export const testWebhook = async (req, res) => {
       });
     }
 
-    // Simuler une commande
     const fakeOrderData = {
       id: 'test_' + Date.now(),
       order_number: 'TEST-' + Math.floor(Math.random() * 10000),
@@ -355,7 +410,6 @@ export const testWebhook = async (req, res) => {
       }]
     };
 
-    // Appeler le handler avec les données simulées
     req.body = fakeOrderData;
     return handleOrderPaid(req, res);
 
@@ -370,5 +424,6 @@ export const testWebhook = async (req, res) => {
 
 export default {
   handleOrderPaid,
+  handleProductDelete,
   testWebhook
 };
