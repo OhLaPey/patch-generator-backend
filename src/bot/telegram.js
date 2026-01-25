@@ -264,7 +264,6 @@ async function getNextClubFromCache() {
     const cached = clubCache.shift();
     
     // Vérifier que le club n'a pas été traité entre-temps
-    await cached.row.load();
     const currentStatus = cached.row.get('Statut_Shopify');
     
     if (!currentStatus || currentStatus.trim() === '') {
