@@ -1,7 +1,9 @@
 /**
- * PPATCH - Bot Telegram Unifié v2
+ * PPATCH - Bot Telegram Unifié v3
  * - Validation Emails (/next)
  * - Validation Logos multi-sources (/logo)
+ * - Recherche Google avec sport
+ * - Validation URLs images
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -46,6 +48,22 @@ async function initGoogleSheets() {
   return sheet;
 }
 
+async function isValidImageUrl(url) {
+  try {
+    const response = await axios.head(url, { timeout: 5000 });
+    const contentType = response.headers['content-type'] || '';
+    return contentType.startsWith('image/');
+  } catch (error) {
+    try {
+      const response = await axios.get(url, { timeout: 5000, responseType: 'arraybuffer', maxContentLength: 100000 });
+      const contentType = response.headers['content-type'] || '';
+      return contentType.startsWith('image/');
+    } catch (e) {
+      return false;
+    }
+  }
+}
+
 async function searchLogoWikipedia(clubName) {
   try {
     const searchUrl = 'https://fr.wikipedia.org/w/api.php?action=query&list=search&srsearch=' + encodeURIComponent(clubName) + '&format=json&origin=*';
@@ -68,7 +86,10 @@ async function searchLogoWikipedia(clubName) {
           const imagePages = imageInfoRes.data.query?.pages;
           if (imagePages) {
             const imagePage = Object.values(imagePages)[0];
-            return imagePage.imageinfo?.[0]?.url || null;
+            const imageUrl = imagePage.imageinfo?.[0]?.url || null;
+            if (imageUrl && await isValidImageUrl(imageUrl)) {
+              return imageUrl;
+            }
           }
         }
       }
@@ -80,23 +101,33 @@ async function searchLogoWikipedia(clubName) {
   }
 }
 
-async function searchLogoGoogle(clubName, numResults) {
+async function searchLogoGoogle(clubName, sport, numResults) {
   numResults = numResults || 3;
   if (!CONFIG.googleApiKey || !CONFIG.googleCx) {
     return [];
   }
   try {
-    const query = clubName + ' logo png';
+    // Ajouter le sport à la recherche si disponible
+    let query = clubName + ' logo png';
+    if (sport) {
+      query = clubName + ' ' + sport + ' logo png';
+    }
     const url = 'https://www.googleapis.com/customsearch/v1?key=' + CONFIG.googleApiKey + '&cx=' + CONFIG.googleCx + '&q=' + encodeURIComponent(query) + '&searchType=image&num=' + numResults;
     const res = await axios.get(url, { timeout: 10000 });
     if (res.data.items?.length > 0) {
-      return res.data.items.map(function(item) {
-        return {
-          url: item.link,
-          title: item.title,
-          thumbnail: item.image?.thumbnailLink
-        };
-      });
+      const validLogos = [];
+      for (let i = 0; i < res.data.items.length; i++) {
+        const item = res.data.items[i];
+        const isValid = await isValidImageUrl(item.link);
+        if (isValid) {
+          validLogos.push({
+            url: item.link,
+            title: item.title,
+            thumbnail: item.image?.thumbnailLink
+          });
+        }
+      }
+      return validLogos;
     }
     return [];
   } catch (error) {
@@ -105,19 +136,29 @@ async function searchLogoGoogle(clubName, numResults) {
   }
 }
 
-async function findAllLogos(clubName, besportLogo) {
+async function findAllLogos(clubName, besportLogo, sport) {
   const logos = [];
+  
+  // 1. Logo BeSport (vérifier si c'est une vraie image)
   if (besportLogo && besportLogo.startsWith('http')) {
-    logos.push({ source: 'BeSport', url: besportLogo, emoji: '🅱️' });
+    const isValid = await isValidImageUrl(besportLogo);
+    if (isValid) {
+      logos.push({ source: 'BeSport', url: besportLogo, emoji: '🅱️' });
+    }
   }
+  
+  // 2. Wikipedia
   const wikiLogo = await searchLogoWikipedia(clubName);
   if (wikiLogo) {
     logos.push({ source: 'Wikipedia', url: wikiLogo, emoji: '📚' });
   }
-  const googleLogos = await searchLogoGoogle(clubName, 3);
+  
+  // 3. Google Images (avec sport)
+  const googleLogos = await searchLogoGoogle(clubName, sport, 3);
   googleLogos.forEach(function(logo, index) {
     logos.push({ source: 'Google ' + (index + 1), url: logo.url, emoji: '🔍' });
   });
+  
   return logos;
 }
 
@@ -157,7 +198,9 @@ async function getNextClubForLogo() {
     const noShopifyStatus = !statutShopify || statutShopify.trim() === '';
     const notRejected = statutShopify !== 'rejected';
     const notProcessing = statutShopify !== 'processing';
-    if (hasLogo && noShopifyStatus && notRejected && notProcessing) {
+    const notSkipped = statutShopify !== 'skipped';
+    const notError = !statutShopify || !statutShopify.startsWith('error');
+    if (hasLogo && noShopifyStatus && notRejected && notProcessing && notSkipped && notError) {
       return {
         row: row,
         data: {
@@ -315,9 +358,12 @@ function isAuthorized(chatId) {
   return chatId.toString() === CONFIG.adminChatId.toString();
 }
 
-function getGoogleImagesLink(clubName) {
-  const query = encodeURIComponent('logo ' + clubName);
-  return 'https://www.google.com/search?tbm=isch&q=' + query;
+function getGoogleImagesLink(clubName, sport) {
+  let query = 'logo ' + clubName;
+  if (sport) {
+    query = 'logo ' + clubName + ' ' + sport;
+  }
+  return 'https://www.google.com/search?tbm=isch&q=' + encodeURIComponent(query);
 }
 
 async function getStats() {
@@ -358,7 +404,7 @@ function setupBotCommands() {
     }
     const stats = await getStats();
     bot.sendMessage(chatId,
-      '🎯 *PPATCH - Bot Unifié v2*\n\n' +
+      '🎯 *PPATCH - Bot Unifié v3*\n\n' +
       '📧 *Emails:*\n' +
       '• À valider: ' + stats.pendingEmail + '\n' +
       '• Envoyés: ' + stats.sentEmail + '\n\n' +
@@ -414,7 +460,7 @@ function setupBotCommands() {
       '*Validation Emails (/next):*\n' +
       'Valide les emails des clubs qui ont déjà une page Shopify.\n\n' +
       '*Validation Logos (/logo):*\n' +
-      '1. Recherche logos sur BeSport, Wikipedia, Google\n' +
+      '1. Recherche logos sur BeSport, Wikipedia, Google (avec sport)\n' +
       '2. Tu choisis le meilleur logo\n' +
       '3. Création automatique de la page Shopify\n\n' +
       '*Actions logos:*\n' +
@@ -436,7 +482,7 @@ async function sendNextEmail(chatId) {
   const row = result.row;
   const data = result.data;
   userState.set(chatId, { mode: 'email', row: row, data: data });
-  const googleImagesLink = getGoogleImagesLink(data.club);
+  const googleImagesLink = getGoogleImagesLink(data.club, data.sport);
   const message =
     '📧 *VALIDATION EMAIL*\n\n' +
     '🏆 *' + data.club + '*\n' +
@@ -472,9 +518,12 @@ async function sendNextLogo(chatId) {
   }
   const row = result.row;
   const data = result.data;
-  await bot.sendMessage(chatId, '🔎 Recherche logos pour *' + data.club + '*...', { parse_mode: 'Markdown' });
-  const logos = await findAllLogos(data.club, data.logo);
+  await bot.sendMessage(chatId, '🔎 Recherche logos pour *' + data.club + '* (' + (data.sport || 'sport inconnu') + ')...', { parse_mode: 'Markdown' });
+  
+  // Passer le sport à la recherche
+  const logos = await findAllLogos(data.club, data.logo, data.sport);
   userState.set(chatId, { mode: 'logo', row: row, data: data, logos: logos });
+  
   if (logos.length === 0) {
     const keyboard = {
       inline_keyboard: [
@@ -487,11 +536,12 @@ async function sendNextLogo(chatId) {
     return bot.sendMessage(chatId,
       '🏆 *' + data.club + '*\n' +
       '⚽ ' + (data.sport || '-') + ' | 📍 ' + (data.ville || '-') + '\n\n' +
-      '❌ *Aucun logo trouvé*\n\n' +
-      '🔍 [Chercher manuellement](' + getGoogleImagesLink(data.club) + ')',
+      '❌ *Aucun logo valide trouvé*\n\n' +
+      '🔍 [Chercher manuellement](' + getGoogleImagesLink(data.club, data.sport) + ')',
       { parse_mode: 'Markdown', reply_markup: keyboard }
     );
   }
+  
   for (let i = 0; i < logos.length; i++) {
     const logo = logos[i];
     try {
@@ -503,6 +553,7 @@ async function sendNextLogo(chatId) {
       await bot.sendMessage(chatId, logo.emoji + ' *' + logo.source + '*: ' + logo.url, { parse_mode: 'Markdown' });
     }
   }
+  
   const logoButtons = logos.map(function(logo, index) {
     return {
       text: logo.emoji + ' ' + logo.source,
@@ -521,7 +572,7 @@ async function sendNextLogo(chatId) {
   await bot.sendMessage(chatId,
     '🏆 *' + data.club + '*\n' +
     '⚽ ' + (data.sport || '-') + ' | 📍 ' + (data.ville || '-') + '\n\n' +
-    '📸 *' + logos.length + ' logo(s) trouvé(s)*\n\n' +
+    '📸 *' + logos.length + ' logo(s) valide(s) trouvé(s)*\n\n' +
     '👆 *Choisis le meilleur logo:*',
     { parse_mode: 'Markdown', reply_markup: keyboard }
   );
@@ -594,7 +645,6 @@ async function handleCallbackQuery(query) {
 
     if (action === 'logo_skip') {
       await bot.answerCallbackQuery(query.id, { text: '⏭️ Passé' });
-      // Marquer comme "skipped" pour ne pas le reproposer
       await updateLogoStatus(row, 'skipped');
       userState.delete(chatId);
       return sendNextLogo(chatId);
@@ -614,7 +664,6 @@ async function handleCallbackQuery(query) {
       }
       await bot.answerCallbackQuery(query.id, { text: '⏳ Création en cours...' });
       
-      // Marquer immédiatement comme "processing" pour passer au suivant
       await updateLogoStatus(row, 'processing');
       
       await bot.sendMessage(chatId,
@@ -624,7 +673,6 @@ async function handleCallbackQuery(query) {
         { parse_mode: 'Markdown' }
       );
       
-      // Lancer la création en arrière-plan (sans attendre)
       createClubShopifyPage(data, selectedLogo.url).then(function(result) {
         if (result.success) {
           updateLogoStatus(row, result.productUrl);
@@ -639,7 +687,6 @@ async function handleCallbackQuery(query) {
         }
       });
       
-      // Continuer immédiatement avec le prochain logo
       userState.delete(chatId);
       setTimeout(function() { sendNextLogo(chatId); }, 500);
     }
@@ -684,7 +731,7 @@ export async function startTelegramBot() {
     console.log('✅ Bot Telegram démarré');
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v2 redémarré !\n\n/logo pour valider les logos avec recherche multi-sources');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v3 redémarré !\n\n/logo pour valider les logos avec recherche améliorée (sport + validation URL)');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
