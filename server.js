@@ -10,6 +10,7 @@ import { initializeEmailService } from './services/emailService.js';
 import rateLimiter from './middleware/rateLimiter.js';
 import errorHandler from './middleware/errorHandler.js';
 import { User } from './models/User.js';
+import { startPlanningBot } from './src/bot/planningBot.js';
 import { getClientIP } from './utils/helpers.js';
 import webhookRoutes from './routes/webhooks.js';
 import {
