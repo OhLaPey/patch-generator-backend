@@ -46,6 +46,17 @@ const LEGENDE = {
     "FORP": "Formation"
 };
 
+// Mapping jours
+const JOURS_MAP = {
+    'Lu': 0, 'Lun': 0, 'Lundi': 0,
+    'Ma': 1, 'Mar': 1, 'Mardi': 1,
+    'Me': 2, 'Mer': 2, 'Mercredi': 2,
+    'Je': 3, 'Jeu': 3, 'Jeudi': 3,
+    'Ve': 4, 'Ven': 4, 'Vendredi': 4,
+    'Sa': 5, 'Sam': 5, 'Samedi': 5,
+    'Di': 6, 'Dim': 6, 'Dimanche': 6
+};
+
 let planningBot = null;
 
 export async function startPlanningBot() {
@@ -101,7 +112,6 @@ export async function startPlanningBot() {
             const imagePath = path.join(tempDir, `planning_${timestamp}.png`);
             
             try {
-                // Résolution 300 DPI pour meilleure lecture
                 await execAsync(`pdftoppm -png -r 300 -singlefile "${pdfPath}" "${path.join(tempDir, `planning_${timestamp}`)}"`);
             } catch (e) {
                 await execAsync(`convert -density 300 "${pdfPath}[0]" "${imagePath}"`);
@@ -110,66 +120,57 @@ export async function startPlanningBot() {
             const imageBuffer = fs.readFileSync(imagePath);
             const base64Image = imageBuffer.toString('base64');
 
-            await planningBot.sendMessage(chatId, '🤖 Analyse du planning avec Gemini...');
+            await planningBot.sendMessage(chatId, '🤖 Étape 1/2 : Lecture du planning...');
 
-            // Appeler Gemini Vision
+            // Appeler Gemini Vision - ÉTAPE 1 : Lecture simple
             const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
             const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
-            const prompt = `Tu es un expert en lecture de tableaux de planning. Analyse cette image de planning de travail.
+            const prompt1 = `Tu dois lire ce planning de travail. C'est un tableau avec :
+- En-tête : numéro de semaine, année, et les 7 jours avec leurs dates
+- Colonne gauche : noms des employés (NOM Prénom)
+- Chaque ligne horizontale = un employé avec sa couleur de fond unique
+- Dans chaque cellule : des créneaux au format CODE HH:MM/HH:MM
 
-=== STRUCTURE DU TABLEAU ===
-- C'est un tableau avec des LIGNES HORIZONTALES
-- Première colonne: NOM Prénom de l'employé
-- Colonnes suivantes: les 7 jours de la semaine (Lundi à Dimanche)
-- Chaque employé a une COULEUR DE FOND UNIQUE pour sa ligne
-- Dans chaque cellule jour, il peut y avoir PLUSIEURS créneaux empilés verticalement
-
-=== MÉTHODE DE LECTURE (TRÈS IMPORTANT) ===
-1. Identifie d'abord l'en-tête: numéro de semaine, dates, jours
-2. Pour CHAQUE employé, lis sa ligne HORIZONTALEMENT de gauche à droite:
-   - Repère le nom dans la première colonne
-   - Pour chaque jour (colonne), lis TOUS les créneaux de cette cellule
-   - Un créneau = CODE HH:MM/HH:MM (ex: VDC 09:45/17:30)
-   - Attention: plusieurs créneaux peuvent être empilés dans une même cellule
-3. La COULEUR de fond délimite les créneaux d'un employé - ne mélange pas avec l'employé au-dessus ou en-dessous
-
-=== LISTE DES EMPLOYÉS À CHERCHER ===
+LISTE DES EMPLOYÉS À TROUVER :
 ${ALL_EMPLOYEES.join(', ')}
 
-=== CODES D'ACTIVITÉ POSSIBLES ===
-VDC, EDF-A, EDF-B, EDF-C, C-PAD, PAD-A, CUP-R, CUP-L, L-REG, L-ARB, REU, ANNIV, AIDE, EV-RE, EV-LO, FORE, FORP
+CODES POSSIBLES : VDC, EDF-A, EDF-B, EDF-C, C-PAD, PAD-A, CUP-R, CUP-L, L-REG, L-ARB, REU, ANNIV, AIDE, EV-RE, EV-LO, FORE, FORP
 
-=== FORMAT DE SORTIE JSON ===
-{
-  "semaine": <numéro>,
-  "annee": <année>,
-  "date_debut": "<jour> <mois>",
-  "date_fin": "<jour> <mois>",
-  "jours": [<num jour 1>, <num jour 2>, ...],
-  "mois_jours": [<mois du jour 1>, <mois du jour 2>, ...],
-  "employes": {
-    "NOM Prénom": {
-      "<num_jour>": [
-        {"code": "CODE", "debut": "HH:MM", "fin": "HH:MM"},
-        {"code": "CODE2", "debut": "HH:MM", "fin": "HH:MM"}
-      ],
-      "<num_jour2>": [...]
-    }
-  }
-}
+=== TÂCHE ===
+Lis le tableau ligne par ligne et écris ce que tu vois pour CHAQUE employé.
 
-=== RÈGLES IMPORTANTES ===
-- N'inclus QUE les employés qui ont AU MOINS UN créneau
-- Si un employé n'a rien sur sa ligne = il est en repos, ne l'inclus pas
-- Vérifie bien que chaque créneau est attribué au BON employé (même couleur de fond)
-- Les heures sont au format HH:MM (ex: 09:45, 17:30, 24:00 pour minuit)
-- mois_jours: 1=janvier, 2=février, etc.
+Format de sortie EXACT (une ligne par employé) :
+SEMAINE: <num>
+ANNEE: <année>
+JOURS: <jour1> <date1>, <jour2> <date2>, ... (ex: Lu 26, Ma 27, Me 28, Je 29, Ve 30, Sa 31, Di 1)
+MOIS_DEBUT: <mois du premier jour en chiffre 1-12>
+MOIS_FIN: <mois du dernier jour en chiffre 1-12>
+---
+NOM Prénom: Jour CODE HH:MM/HH:MM, Jour CODE HH:MM/HH:MM, ...
+NOM Prénom: REPOS
+...
 
-Réponds UNIQUEMENT avec le JSON valide, sans texte avant ou après.`;
+EXEMPLE :
+SEMAINE: 5
+ANNEE: 2026
+JOURS: Lu 26, Ma 27, Me 28, Je 29, Ve 30, Sa 31, Di 1
+MOIS_DEBUT: 1
+MOIS_FIN: 2
+---
+BONILLO Matthieu: Sa EDF-C 09:00/13:00, Di ANNIV 13:45/17:45
+BOULARDET Lucas: REPOS
+CARRERE Peïo: Ma VDC 15:00/18:15, Ma L-REG 18:15/21:45, Me VDC 11:45/19:15, Me L-REG 19:15/21:45
 
-            const result = await model.generateContent([
-                prompt,
+IMPORTANT :
+- Lis HORIZONTALEMENT chaque ligne d'employé
+- La COULEUR de fond délimite les créneaux d'un employé
+- Si un employé n'a AUCUN créneau visible = écris REPOS
+- Écris TOUS les créneaux que tu vois pour chaque employé
+- Utilise les abréviations de jours : Lu, Ma, Me, Je, Ve, Sa, Di`;
+
+            const result1 = await model.generateContent([
+                prompt1,
                 {
                     inlineData: {
                         mimeType: 'image/png',
@@ -178,24 +179,21 @@ Réponds UNIQUEMENT avec le JSON valide, sans texte avant ou après.`;
                 }
             ]);
 
-            const responseText = result.response.text();
+            const responseText = result1.response.text();
+            console.log('📋 Gemini raw response:', responseText);
+
+            await planningBot.sendMessage(chatId, '🔄 Étape 2/2 : Structuration des données...');
+
+            // ÉTAPE 2 : Parser le texte en données structurées
+            const planningData = parseGeminiResponse(responseText);
             
-            // Extraire le JSON
-            let planningData;
-            try {
-                let jsonStr = responseText;
-                if (jsonStr.includes('```json')) {
-                    jsonStr = jsonStr.split('```json')[1].split('```')[0];
-                } else if (jsonStr.includes('```')) {
-                    jsonStr = jsonStr.split('```')[1].split('```')[0];
-                }
-                planningData = JSON.parse(jsonStr.trim());
-            } catch (e) {
-                console.error('Erreur parsing JSON:', responseText);
-                throw new Error('Erreur lors de l\'analyse du planning. Réessayez.');
+            if (!planningData) {
+                throw new Error('Impossible de parser la réponse. Réessayez.');
             }
 
-            const employesActifs = Object.keys(planningData.employes);
+            const employesActifs = Object.keys(planningData.employes).filter(
+                e => Object.keys(planningData.employes[e]).length > 0
+            );
             const nbEmployes = employesActifs.length;
             const semaine = planningData.semaine;
             
@@ -236,10 +234,8 @@ Réponds UNIQUEMENT avec le JSON valide, sans texte avant ou après.`;
                 employesActifs: employesActifs
             };
             
-            // Générer le index.html principal
+            // Générer les pages HTML
             const indexHtml = generateWeekHtml(planningData, employesActifs, existingWeeks);
-            
-            // Générer la page de la semaine spécifique
             const weekHtml = generateWeekHtml(planningData, employesActifs, existingWeeks);
             
             await planningBot.sendMessage(chatId, `📤 Upload sur GitHub (${nbFichiers} fichiers + pages web)...`);
@@ -254,15 +250,14 @@ Réponds UNIQUEMENT avec le JSON valide, sans texte avant ou après.`;
             
             await uploadToGitHub(filesToUpload, semaine);
 
-            // Envoyer le message final avec résumé
+            // Envoyer le message final
             const siteUrl = 'https://planning-urbansoccer.onrender.com';
             
-            // Créer un résumé des employés
             const employesRepos = ALL_EMPLOYEES.filter(e => {
                 const eNorm = e.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
                 return !employesActifs.some(ea => {
                     const eaNorm = ea.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-                    return eaNorm.includes(eNorm.split(' ')[0]) || eNorm.includes(eaNorm.split(' ')[0]);
+                    return eaNorm.split(' ')[0] === eNorm.split(' ')[0];
                 });
             });
             
@@ -293,6 +288,123 @@ Réponds UNIQUEMENT avec le JSON valide, sans texte avant ou après.`;
     return planningBot;
 }
 
+function parseGeminiResponse(text) {
+    try {
+        const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+        
+        let semaine = null;
+        let annee = null;
+        let jours = [];
+        let moisDebut = 1;
+        let moisFin = 1;
+        let employes = {};
+        let parsingEmployees = false;
+        
+        for (const line of lines) {
+            // Parse metadata
+            if (line.startsWith('SEMAINE:')) {
+                semaine = parseInt(line.replace('SEMAINE:', '').trim());
+            } else if (line.startsWith('ANNEE:')) {
+                annee = parseInt(line.replace('ANNEE:', '').trim());
+            } else if (line.startsWith('JOURS:')) {
+                const joursStr = line.replace('JOURS:', '').trim();
+                const joursMatch = joursStr.match(/\d+/g);
+                if (joursMatch) {
+                    jours = joursMatch.map(j => parseInt(j));
+                }
+            } else if (line.startsWith('MOIS_DEBUT:')) {
+                moisDebut = parseInt(line.replace('MOIS_DEBUT:', '').trim());
+            } else if (line.startsWith('MOIS_FIN:')) {
+                moisFin = parseInt(line.replace('MOIS_FIN:', '').trim());
+            } else if (line === '---') {
+                parsingEmployees = true;
+            } else if (parsingEmployees && line.includes(':')) {
+                // Parse employee line
+                const colonIndex = line.indexOf(':');
+                const employeeName = line.substring(0, colonIndex).trim();
+                const creneauxStr = line.substring(colonIndex + 1).trim();
+                
+                // Vérifier si c'est un employé connu
+                const matchedEmployee = ALL_EMPLOYEES.find(e => {
+                    const eNorm = e.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                    const nameNorm = employeeName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                    return eNorm === nameNorm || eNorm.split(' ')[0] === nameNorm.split(' ')[0];
+                });
+                
+                if (matchedEmployee) {
+                    if (creneauxStr.toUpperCase() === 'REPOS' || creneauxStr === '-' || creneauxStr === '') {
+                        employes[matchedEmployee] = {};
+                    } else {
+                        employes[matchedEmployee] = parseCreneaux(creneauxStr, jours, moisDebut, moisFin);
+                    }
+                }
+            }
+        }
+        
+        // Générer mois_jours
+        const mois_jours = jours.map((j, idx) => {
+            // Si le jour est plus petit que le précédent, on est passé au mois suivant
+            if (idx > 0 && j < jours[idx - 1]) {
+                return moisFin;
+            }
+            return moisDebut;
+        });
+        
+        // Calculer dates
+        const moisNoms = ['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 
+                         'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+        const date_debut = jours.length > 0 ? `${jours[0]} ${moisNoms[moisDebut]}` : '';
+        const date_fin = jours.length > 0 ? `${jours[jours.length - 1]} ${moisNoms[moisFin]}` : '';
+        
+        return {
+            semaine: semaine || 1,
+            annee: annee || 2026,
+            date_debut,
+            date_fin,
+            jours,
+            mois_jours,
+            employes
+        };
+    } catch (e) {
+        console.error('Erreur parsing:', e);
+        return null;
+    }
+}
+
+function parseCreneaux(str, jours, moisDebut, moisFin) {
+    const result = {};
+    
+    // Regex pour matcher "Jour CODE HH:MM/HH:MM"
+    const regex = /(Lu|Ma|Me|Je|Ve|Sa|Di|Lun|Mar|Mer|Jeu|Ven|Sam|Dim)\s+([A-Z][A-Z0-9\-]+)\s+(\d{1,2}:\d{2})\/(\d{1,2}:\d{2})/gi;
+    
+    let match;
+    while ((match = regex.exec(str)) !== null) {
+        const jourAbbr = match[1];
+        const code = match[2].toUpperCase();
+        const debut = match[3];
+        const fin = match[4];
+        
+        // Trouver l'index du jour
+        const jourIndex = JOURS_MAP[jourAbbr] ?? JOURS_MAP[jourAbbr.charAt(0).toUpperCase() + jourAbbr.slice(1).toLowerCase()];
+        
+        if (jourIndex !== undefined && jours[jourIndex] !== undefined) {
+            const jourNum = jours[jourIndex].toString();
+            
+            if (!result[jourNum]) {
+                result[jourNum] = [];
+            }
+            
+            result[jourNum].push({
+                code: code,
+                debut: debut,
+                fin: fin
+            });
+        }
+    }
+    
+    return result;
+}
+
 async function getExistingWeeks() {
     try {
         const url = `https://api.github.com/repos/${GITHUB_REPO}/contents/data`;
@@ -317,19 +429,16 @@ async function getExistingWeeks() {
 function generateWeekHtml(planningData, employesActifs, allWeeks) {
     const { semaine, date_debut, date_fin } = planningData;
     
-    // Normaliser les noms des employés actifs pour comparaison
     const employesActifsNormalises = employesActifs.map(e => 
         e.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     );
     
-    // Générer les onglets de semaines
     const weeksTabsHtml = allWeeks.map(w => {
         const isActive = w === semaine;
         const href = w === semaine ? '#' : `S${w}.html`;
         return `            <a href="${href}" class="week-tab ${isActive ? 'active' : ''}">S${w}</a>`;
     }).join('\n');
     
-    // Générer la liste des employés
     const employeesHtml = ALL_EMPLOYEES.map(emp => {
         const fileName = emp
             .toLowerCase()
@@ -339,10 +448,7 @@ function generateWeekHtml(planningData, employesActifs, allWeeks) {
         
         const empNormalise = emp.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
         const isActif = employesActifsNormalises.some(e => {
-            const eParts = e.split(' ');
-            const empParts = empNormalise.split(' ');
-            // Match sur le nom de famille (premier élément)
-            return eParts[0] === empParts[0];
+            return e.split(' ')[0] === empNormalise.split(' ')[0];
         });
         
         if (isActif) {
@@ -361,144 +467,67 @@ function generateWeekHtml(planningData, employesActifs, allWeeks) {
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             min-height: 100vh;
             padding: 20px;
         }
-        
-        .container {
-            max-width: 500px;
-            margin: 0 auto;
-        }
-        
-        .header {
-            text-align: center;
-            margin-bottom: 20px;
-            padding: 20px;
-        }
-        
-        .logo {
-            font-size: 48px;
-            margin-bottom: 10px;
-        }
-        
-        h1 {
-            color: #FF6B35;
-            font-size: 28px;
-            font-weight: 700;
-            margin-bottom: 8px;
-        }
-        
-        .subtitle {
-            color: #888;
-            font-size: 14px;
-            margin-bottom: 5px;
-        }
-        
+        .container { max-width: 500px; margin: 0 auto; }
+        .header { text-align: center; margin-bottom: 20px; padding: 20px; }
+        .logo { font-size: 48px; margin-bottom: 10px; }
+        h1 { color: #FF6B35; font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+        .subtitle { color: #888; font-size: 14px; margin-bottom: 5px; }
         .dates {
-            color: #FF6B35;
-            font-size: 18px;
-            font-weight: 600;
+            color: #FF6B35; font-size: 18px; font-weight: 600;
             background: rgba(255, 107, 53, 0.1);
-            padding: 10px 20px;
-            border-radius: 20px;
-            display: inline-block;
-            margin-top: 10px;
+            padding: 10px 20px; border-radius: 20px;
+            display: inline-block; margin-top: 10px;
         }
-        
-        /* Week Tabs */
         .week-selector {
-            display: flex;
-            justify-content: center;
-            gap: 8px;
-            margin-bottom: 25px;
-            flex-wrap: wrap;
+            display: flex; justify-content: center; gap: 8px;
+            margin-bottom: 25px; flex-wrap: wrap;
         }
-        
         .week-tab {
             padding: 10px 18px;
             background: rgba(255, 255, 255, 0.05);
             border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 25px;
-            color: #888;
-            text-decoration: none;
-            font-weight: 500;
-            font-size: 14px;
+            border-radius: 25px; color: #888;
+            text-decoration: none; font-weight: 500; font-size: 14px;
             transition: all 0.2s ease;
         }
-        
         .week-tab:hover {
             background: rgba(255, 107, 53, 0.1);
-            border-color: rgba(255, 107, 53, 0.3);
-            color: #FF6B35;
+            border-color: rgba(255, 107, 53, 0.3); color: #FF6B35;
         }
-        
-        .week-tab.active {
-            background: #FF6B35;
-            border-color: #FF6B35;
-            color: white;
-        }
-        
-        .employees {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-        
+        .week-tab.active { background: #FF6B35; border-color: #FF6B35; color: white; }
+        .employees { display: flex; flex-direction: column; gap: 8px; }
         .employee {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
+            display: flex; align-items: center; justify-content: space-between;
             padding: 16px 20px;
             background: rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            color: white;
-            text-decoration: none;
-            font-weight: 500;
+            border-radius: 12px; color: white;
+            text-decoration: none; font-weight: 500;
             transition: all 0.2s ease;
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
-        
         a.employee:hover {
             background: rgba(255, 107, 53, 0.2);
-            border-color: #FF6B35;
-            transform: translateX(5px);
+            border-color: #FF6B35; transform: translateX(5px);
         }
-        
-        a.employee::after {
-            content: '📅';
-            font-size: 20px;
-        }
-        
+        a.employee::after { content: '📅'; font-size: 20px; }
         .employee.repos {
             color: #555;
             background: rgba(255, 255, 255, 0.02);
             border-color: rgba(255, 255, 255, 0.05);
         }
-        
         .badge {
-            font-size: 11px;
-            padding: 4px 10px;
+            font-size: 11px; padding: 4px 10px;
             background: rgba(255, 255, 255, 0.1);
-            border-radius: 20px;
-            color: #555;
-            font-weight: 400;
+            border-radius: 20px; color: #555; font-weight: 400;
         }
-        
-        .footer {
-            text-align: center;
-            margin-top: 30px;
-            color: #666;
-            font-size: 12px;
-        }
+        .footer { text-align: center; margin-top: 30px; color: #666; font-size: 12px; }
     </style>
 </head>
 <body>
@@ -509,15 +538,12 @@ function generateWeekHtml(planningData, employesActifs, allWeeks) {
             <p class="subtitle">Semaine ${semaine}</p>
             <div class="dates">${date_debut || ''} → ${date_fin || ''}</div>
         </div>
-        
         <div class="week-selector">
 ${weeksTabsHtml}
         </div>
-        
         <div class="employees">
 ${employeesHtml}
         </div>
-        
         <div class="footer">
             <p>Cliquez sur votre nom pour ajouter le planning à votre calendrier</p>
         </div>
@@ -560,7 +586,7 @@ END:VTIMEZONE
     for (const [jourStr, events] of Object.entries(creneaux)) {
         const jour = parseInt(jourStr);
         const jourIndex = jours.indexOf(jour);
-        const moisJour = jourIndex >= 0 ? mois_jours[jourIndex] : planningData.mois;
+        const moisJour = jourIndex >= 0 ? mois_jours[jourIndex] : 1;
         
         for (const event of events) {
             const code = event.code;
