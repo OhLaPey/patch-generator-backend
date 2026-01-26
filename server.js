@@ -1,5 +1,6 @@
 import express from 'express';
 import { startTelegramBot } from './src/bot/telegram.js';
+import { startPlanningBot } from './src/bot/planningBot.js';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { connectDB } from './config/mongodb.js';
@@ -10,7 +11,6 @@ import { initializeEmailService } from './services/emailService.js';
 import rateLimiter from './middleware/rateLimiter.js';
 import errorHandler from './middleware/errorHandler.js';
 import { User } from './models/User.js';
-import { startPlanningBot } from './src/bot/planningBot.js';
 import { getClientIP } from './utils/helpers.js';
 import webhookRoutes from './routes/webhooks.js';
 import {
@@ -77,11 +77,18 @@ const initializeServices = async () => {
     // 5. Email Service (Gmail)
     initializeEmailService();
 
-    // 6. Telegram Bot
+    // 6. Telegram Bot (PPATCH)
     try {
       await startTelegramBot();
     } catch (err) {
       console.warn('⚠️ Telegram Bot failed to start:', err.message);
+    }
+
+    // 7. Planning Bot Urban 7D
+    try {
+      await startPlanningBot();
+    } catch (err) {
+      console.warn('⚠️ Planning Bot failed to start:', err.message);
     }
 
     console.log('='.repeat(60));
