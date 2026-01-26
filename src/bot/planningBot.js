@@ -95,15 +95,16 @@ export async function startPlanningBot() {
             const pdfPath = path.join(tempDir, `planning_${timestamp}.pdf`);
             fs.writeFileSync(pdfPath, pdfResponse.data);
 
-            await planningBot.sendMessage(chatId, '🖼️ Conversion en image...');
+            await planningBot.sendMessage(chatId, '🖼️ Conversion en image HD...');
 
-            // Convertir PDF en image avec pdftoppm
+            // Convertir PDF en image HAUTE RÉSOLUTION
             const imagePath = path.join(tempDir, `planning_${timestamp}.png`);
             
             try {
-                await execAsync(`pdftoppm -png -r 200 -singlefile "${pdfPath}" "${path.join(tempDir, `planning_${timestamp}`)}"`);
+                // Résolution 300 DPI pour meilleure lecture
+                await execAsync(`pdftoppm -png -r 300 -singlefile "${pdfPath}" "${path.join(tempDir, `planning_${timestamp}`)}"`);
             } catch (e) {
-                await execAsync(`convert -density 200 "${pdfPath}[0]" "${imagePath}"`);
+                await execAsync(`convert -density 300 "${pdfPath}[0]" "${imagePath}"`);
             }
 
             const imageBuffer = fs.readFileSync(imagePath);
@@ -115,42 +116,57 @@ export async function startPlanningBot() {
             const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
             const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
-            const prompt = `Analyse ce planning de travail et extrais les horaires de chaque employé.
+            const prompt = `Tu es un expert en lecture de tableaux de planning. Analyse cette image de planning de travail.
 
-IMPORTANT: 
-- Regarde bien les couleurs des lignes pour identifier à quel employé appartient chaque créneau
-- Chaque employé a une couleur de fond différente
-- Les créneaux sont au format CODE HH:MM/HH:MM (ex: VDC 09:45/17:30)
+=== STRUCTURE DU TABLEAU ===
+- C'est un tableau avec des LIGNES HORIZONTALES
+- Première colonne: NOM Prénom de l'employé
+- Colonnes suivantes: les 7 jours de la semaine (Lundi à Dimanche)
+- Chaque employé a une COULEUR DE FOND UNIQUE pour sa ligne
+- Dans chaque cellule jour, il peut y avoir PLUSIEURS créneaux empilés verticalement
 
-Voici la liste complète des employés possibles:
+=== MÉTHODE DE LECTURE (TRÈS IMPORTANT) ===
+1. Identifie d'abord l'en-tête: numéro de semaine, dates, jours
+2. Pour CHAQUE employé, lis sa ligne HORIZONTALEMENT de gauche à droite:
+   - Repère le nom dans la première colonne
+   - Pour chaque jour (colonne), lis TOUS les créneaux de cette cellule
+   - Un créneau = CODE HH:MM/HH:MM (ex: VDC 09:45/17:30)
+   - Attention: plusieurs créneaux peuvent être empilés dans une même cellule
+3. La COULEUR de fond délimite les créneaux d'un employé - ne mélange pas avec l'employé au-dessus ou en-dessous
+
+=== LISTE DES EMPLOYÉS À CHERCHER ===
 ${ALL_EMPLOYEES.join(', ')}
 
-Pour chaque employé QUI A AU MOINS UN CRÉNEAU, donne-moi ses horaires au format JSON:
+=== CODES D'ACTIVITÉ POSSIBLES ===
+VDC, EDF-A, EDF-B, EDF-C, C-PAD, PAD-A, CUP-R, CUP-L, L-REG, L-ARB, REU, ANNIV, AIDE, EV-RE, EV-LO, FORE, FORP
+
+=== FORMAT DE SORTIE JSON ===
 {
-  "semaine": <numéro de semaine>,
+  "semaine": <numéro>,
   "annee": <année>,
-  "date_debut": "<jour début> <mois en lettres>",
-  "date_fin": "<jour fin> <mois en lettres>",
-  "jours": [<liste des numéros de jours>],
-  "mois_jours": [<mois correspondant à chaque jour: 1=janvier, 2=février, etc>],
+  "date_debut": "<jour> <mois>",
+  "date_fin": "<jour> <mois>",
+  "jours": [<num jour 1>, <num jour 2>, ...],
+  "mois_jours": [<mois du jour 1>, <mois du jour 2>, ...],
   "employes": {
     "NOM Prénom": {
-      "<jour>": [{"code": "<CODE>", "debut": "HH:MM", "fin": "HH:MM"}, ...],
-      ...
-    },
-    ...
+      "<num_jour>": [
+        {"code": "CODE", "debut": "HH:MM", "fin": "HH:MM"},
+        {"code": "CODE2", "debut": "HH:MM", "fin": "HH:MM"}
+      ],
+      "<num_jour2>": [...]
+    }
   }
 }
 
-Les codes d'activité possibles: VDC, EDF-A, EDF-B, EDF-C, C-PAD, PAD-A, CUP-R, CUP-L, L-REG, L-ARB, REU, ANNIV, AIDE, EV-RE, EV-LO, FORE, FORP.
+=== RÈGLES IMPORTANTES ===
+- N'inclus QUE les employés qui ont AU MOINS UN créneau
+- Si un employé n'a rien sur sa ligne = il est en repos, ne l'inclus pas
+- Vérifie bien que chaque créneau est attribué au BON employé (même couleur de fond)
+- Les heures sont au format HH:MM (ex: 09:45, 17:30, 24:00 pour minuit)
+- mois_jours: 1=janvier, 2=février, etc.
 
-ATTENTION:
-- N'inclus QUE les employés qui ont au moins un créneau
-- Les employés sans créneau sont en repos toute la semaine, ne les inclus pas
-- Fais très attention aux couleurs pour associer correctement les créneaux aux employés
-- Pour date_debut et date_fin, utilise le format "2 Février" par exemple
-
-Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
+Réponds UNIQUEMENT avec le JSON valide, sans texte avant ou après.`;
 
             const result = await model.generateContent([
                 prompt,
@@ -183,10 +199,19 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
             const nbEmployes = employesActifs.length;
             const semaine = planningData.semaine;
             
+            // Compter le nombre total de créneaux
+            let totalCreneaux = 0;
+            for (const emp of Object.values(planningData.employes)) {
+                for (const jour of Object.values(emp)) {
+                    totalCreneaux += jour.length;
+                }
+            }
+            
             await planningBot.sendMessage(chatId, 
                 `✅ Planning S${semaine} analysé!\n` +
                 `📅 ${planningData.date_debut || ''} - ${planningData.date_fin || ''}\n` +
-                `👥 ${nbEmployes} employés avec créneaux\n\n` +
+                `👥 ${nbEmployes} employés actifs\n` +
+                `📊 ${totalCreneaux} créneaux détectés\n\n` +
                 `📝 Génération des fichiers iCal...`
             );
 
@@ -197,7 +222,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
                 existingWeeks.sort((a, b) => a - b);
             }
 
-            // Générer les fichiers ICS (dans un dossier par semaine)
+            // Générer les fichiers ICS
             const icsFiles = generateAllICS(planningData);
             const nbFichiers = Object.keys(icsFiles).length;
             
@@ -211,8 +236,8 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
                 employesActifs: employesActifs
             };
             
-            // Générer le index.html principal avec switch de semaines
-            const indexHtml = generateIndexHtml(planningData, employesActifs, existingWeeks);
+            // Générer le index.html principal
+            const indexHtml = generateWeekHtml(planningData, employesActifs, existingWeeks);
             
             // Générer la page de la semaine spécifique
             const weekHtml = generateWeekHtml(planningData, employesActifs, existingWeeks);
@@ -229,15 +254,29 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
             
             await uploadToGitHub(filesToUpload, semaine);
 
-            // Envoyer le message final
+            // Envoyer le message final avec résumé
             const siteUrl = 'https://planning-urbansoccer.onrender.com';
-            await planningBot.sendMessage(chatId, 
-                `🎉 Planning S${semaine} publié!\n\n` +
-                `📅 ${planningData.date_debut || ''} - ${planningData.date_fin || ''}\n` +
-                `👥 ${nbEmployes} employés actifs / ${ALL_EMPLOYEES.length} total\n\n` +
-                `🔗 Lien à partager:\n${siteUrl}\n\n` +
-                `📱 Chaque collègue clique sur son nom pour ajouter le planning à son calendrier.`
-            );
+            
+            // Créer un résumé des employés
+            const employesRepos = ALL_EMPLOYEES.filter(e => {
+                const eNorm = e.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                return !employesActifs.some(ea => {
+                    const eaNorm = ea.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                    return eaNorm.includes(eNorm.split(' ')[0]) || eNorm.includes(eaNorm.split(' ')[0]);
+                });
+            });
+            
+            let finalMessage = `🎉 Planning S${semaine} publié!\n\n` +
+                `📅 ${planningData.date_debut || ''} → ${planningData.date_fin || ''}\n` +
+                `👥 ${nbEmployes} actifs / ${ALL_EMPLOYEES.length} total\n` +
+                `📊 ${totalCreneaux} créneaux\n\n` +
+                `🔗 ${siteUrl}\n\n`;
+            
+            if (employesRepos.length > 0 && employesRepos.length <= 10) {
+                finalMessage += `😴 En repos: ${employesRepos.join(', ')}`;
+            }
+            
+            await planningBot.sendMessage(chatId, finalMessage);
 
             // Nettoyer
             try {
@@ -275,16 +314,7 @@ async function getExistingWeeks() {
     }
 }
 
-function generateIndexHtml(planningData, employesActifs, allWeeks) {
-    const { semaine, date_debut, date_fin } = planningData;
-    
-    // Ce fichier redirige vers la dernière semaine
-    const latestWeek = Math.max(...allWeeks, semaine);
-    
-    return generateWeekHtml(planningData, employesActifs, allWeeks, true);
-}
-
-function generateWeekHtml(planningData, employesActifs, allWeeks, isIndex = false) {
+function generateWeekHtml(planningData, employesActifs, allWeeks) {
     const { semaine, date_debut, date_fin } = planningData;
     
     // Normaliser les noms des employés actifs pour comparaison
@@ -295,7 +325,7 @@ function generateWeekHtml(planningData, employesActifs, allWeeks, isIndex = fals
     // Générer les onglets de semaines
     const weeksTabsHtml = allWeeks.map(w => {
         const isActive = w === semaine;
-        const href = isIndex && isActive ? '#' : (w === semaine ? '#' : `S${w}.html`);
+        const href = w === semaine ? '#' : `S${w}.html`;
         return `            <a href="${href}" class="week-tab ${isActive ? 'active' : ''}">S${w}</a>`;
     }).join('\n');
     
@@ -311,7 +341,8 @@ function generateWeekHtml(planningData, employesActifs, allWeeks, isIndex = fals
         const isActif = employesActifsNormalises.some(e => {
             const eParts = e.split(' ');
             const empParts = empNormalise.split(' ');
-            return eParts[0] === empParts[0] || (eParts[1] && empParts[1] && eParts[1] === empParts[1]);
+            // Match sur le nom de famille (premier élément)
+            return eParts[0] === empParts[0];
         });
         
         if (isActif) {
