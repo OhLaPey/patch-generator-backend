@@ -1,9 +1,14 @@
 /**
- * PPATCH - Bot Telegram Unifié v5.3
+ * PPATCH - Bot Telegram Unifié v5.4
  * - /logo : Valider logos + créer pages
  * - /mail : Valider emails
  * - /sync : Synchroniser avec Shopify
  * - /stats : Statistiques
+ * 
+ * FIX v5.4: Correction du bug de réapparition des clubs validés
+ * - Le cache stocke maintenant rowIndex au lieu de l'objet row
+ * - Vérification fraîche du statut avant affichage
+ * - Nettoyage du cache après validation
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -32,9 +37,14 @@ let sheet = null;
 let CONFIG = null;
 const userState = new Map();
 
+// Cache pour pré-chargement des clubs
+// IMPORTANT: On stocke rowIndex (number) au lieu de l'objet row
 const clubCache = [];
 const CACHE_SIZE = 5;
 let isCacheLoading = false;
+
+// Set des rowIndex en cours de traitement (pour éviter les doublons)
+const processingRows = new Set();
 
 async function initGoogleSheets() {
   const auth = new JWT({
@@ -175,14 +185,52 @@ async function findAllLogos(clubName, besportLogo, sport) {
   return logos;
 }
 
-// ============ PRÉ-CHARGEMENT ============
+// ============ PRÉ-CHARGEMENT (CORRIGÉ v5.4) ============
 
+/**
+ * Récupère une ligne fraîche depuis le Google Sheet par son numéro
+ */
+async function getFreshRow(rowNumber) {
+  const rows = await sheet.getRows();
+  return rows.find(r => r.rowNumber === rowNumber);
+}
+
+/**
+ * Vérifie si une ligne est éligible pour validation de logo
+ */
+function isRowEligibleForLogo(row) {
+  const logoUrl = row.get('Logo');
+  const statutShopify = row.get('Statut_Shopify');
+  
+  const hasLogo = logoUrl && logoUrl.startsWith('http');
+  const noShopifyStatus = !statutShopify || statutShopify.trim() === '';
+  
+  return hasLogo && noShopifyStatus;
+}
+
+/**
+ * Récupère les prochains clubs éligibles pour validation logo
+ * Exclut les clubs déjà en cours de traitement
+ */
 async function getNextClubsForLogo(count) {
   const rows = await sheet.getRows();
   const clubs = [];
   
   for (let i = 0; i < rows.length && clubs.length < count; i++) {
     const row = rows[i];
+    const rowIndex = row.rowNumber;
+    
+    // Exclure les clubs déjà en cours de traitement
+    if (processingRows.has(rowIndex)) {
+      continue;
+    }
+    
+    // Exclure les clubs déjà dans le cache
+    const alreadyInCache = clubCache.some(c => c.rowIndex === rowIndex);
+    if (alreadyInCache) {
+      continue;
+    }
+    
     const logoUrl = row.get('Logo');
     const statutShopify = row.get('Statut_Shopify');
     const hasLogo = logoUrl && logoUrl.startsWith('http');
@@ -194,7 +242,7 @@ async function getNextClubsForLogo(count) {
     
     if (hasLogo && noShopifyStatus && notRejected && notProcessing && notSkipped && notError) {
       clubs.push({
-        row: row,
+        rowIndex: rowIndex,
         data: {
           club: row.get('Club') || row.get('Nom_Court'),
           logo: logoUrl,
@@ -202,7 +250,7 @@ async function getNextClubsForLogo(count) {
           ville: row.get('Ville'),
           departement: row.get('Departement'),
           region: row.get('Region'),
-          rowIndex: row.rowNumber
+          rowIndex: rowIndex
         }
       });
     }
@@ -211,6 +259,10 @@ async function getNextClubsForLogo(count) {
   return clubs;
 }
 
+/**
+ * Pré-charge les logos pour les prochains clubs
+ * Stocke rowIndex au lieu de l'objet row
+ */
 async function preloadClubLogos() {
   if (isCacheLoading) return;
   isCacheLoading = true;
@@ -222,14 +274,15 @@ async function preloadClubLogos() {
       if (clubs.length === 0) break;
       
       for (const clubInfo of clubs) {
-        const alreadyCached = clubCache.some(c => c.data.rowIndex === clubInfo.data.rowIndex);
+        // Double vérification: pas déjà dans le cache
+        const alreadyCached = clubCache.some(c => c.rowIndex === clubInfo.rowIndex);
         if (alreadyCached) continue;
         
         console.log('📦 Pré-chargement: ' + clubInfo.data.club);
         const logos = await findAllLogos(clubInfo.data.club, clubInfo.data.logo, clubInfo.data.sport);
         
         clubCache.push({
-          row: clubInfo.row,
+          rowIndex: clubInfo.rowIndex,
           data: clubInfo.data,
           logos: logos
         });
@@ -248,27 +301,80 @@ async function preloadClubLogos() {
   isCacheLoading = false;
 }
 
+/**
+ * Nettoie le cache des clubs qui ont été traités
+ * Appelé après chaque validation
+ */
+function cleanCache(processedRowIndex) {
+  // Retirer du cache
+  const indexInCache = clubCache.findIndex(c => c.rowIndex === processedRowIndex);
+  if (indexInCache !== -1) {
+    clubCache.splice(indexInCache, 1);
+    console.log('🧹 Club retiré du cache (rowIndex: ' + processedRowIndex + ')');
+  }
+  
+  // Retirer du set de traitement après un délai (laisser le temps à la création Shopify)
+  setTimeout(() => {
+    processingRows.delete(processedRowIndex);
+  }, 60000); // 1 minute
+}
+
+/**
+ * Récupère le prochain club depuis le cache avec vérification fraîche
+ */
 async function getNextClubFromCache() {
   while (clubCache.length > 0) {
     const cached = clubCache.shift();
-    const currentStatus = cached.row.get('Statut_Shopify');
     
-    if (!currentStatus || currentStatus.trim() === '') {
-      setTimeout(preloadClubLogos, 100);
-      return cached;
+    // Récupérer la ligne fraîche depuis le Sheet
+    const freshRow = await getFreshRow(cached.rowIndex);
+    
+    if (!freshRow) {
+      console.log('⚠️ Ligne ' + cached.rowIndex + ' introuvable, passage au suivant');
+      continue;
     }
+    
+    // Vérifier que le statut est toujours vide
+    const currentStatus = freshRow.get('Statut_Shopify');
+    if (currentStatus && currentStatus.trim() !== '') {
+      console.log('⚠️ Club ' + cached.data.club + ' déjà traité (status: ' + currentStatus + '), passage au suivant');
+      continue;
+    }
+    
+    // Marquer comme en cours de traitement
+    processingRows.add(cached.rowIndex);
+    
+    // Lancer le pré-chargement en arrière-plan
+    setTimeout(preloadClubLogos, 100);
+    
+    return {
+      row: freshRow,
+      rowIndex: cached.rowIndex,
+      data: cached.data,
+      logos: cached.logos
+    };
   }
   
+  // Cache vide, chercher directement
   const clubs = await getNextClubsForLogo(1);
   if (clubs.length === 0) return null;
   
   const clubInfo = clubs[0];
+  
+  // Récupérer la ligne fraîche
+  const freshRow = await getFreshRow(clubInfo.rowIndex);
+  if (!freshRow) return null;
+  
+  // Marquer comme en cours
+  processingRows.add(clubInfo.rowIndex);
+  
   const logos = await findAllLogos(clubInfo.data.club, clubInfo.data.logo, clubInfo.data.sport);
   
   setTimeout(preloadClubLogos, 100);
   
   return {
-    row: clubInfo.row,
+    row: freshRow,
+    rowIndex: clubInfo.rowIndex,
     data: clubInfo.data,
     logos: logos
   };
@@ -566,10 +672,11 @@ function setupBotCommands() {
     }
     const stats = await getStats();
     bot.sendMessage(chatId,
-      '🎯 *PPATCH Bot v5.3*\n\n' +
+      '🎯 *PPATCH Bot v5.4*\n\n' +
       '🖼️ *Logos:* ' + stats.pendingLogo + ' à valider | ' + stats.createdLogo + ' créés\n' +
       '📧 *Emails:* ' + stats.pendingEmail + ' à valider | ' + stats.sentEmail + ' envoyés\n\n' +
-      '📦 Cache: ' + clubCache.length + ' clubs pré-chargés',
+      '📦 Cache: ' + clubCache.length + ' clubs pré-chargés\n' +
+      '🔄 Processing: ' + processingRows.size + ' en cours',
       { parse_mode: 'Markdown' }
     );
     preloadClubLogos();
@@ -590,7 +697,8 @@ function setupBotCommands() {
       '• À valider: ' + stats.pendingEmail + '\n' +
       '• Envoyés: ' + stats.sentEmail + '\n' +
       '• Invalides: ' + stats.invalidEmail + '\n\n' +
-      '📦 Cache: ' + clubCache.length + ' clubs',
+      '📦 Cache: ' + clubCache.length + ' clubs\n' +
+      '🔄 Processing: ' + processingRows.size + ' en cours',
       { parse_mode: 'Markdown' }
     );
   });
@@ -611,6 +719,16 @@ function setupBotCommands() {
     const chatId = msg.chat.id;
     if (!isAuthorized(chatId)) return;
     await syncShopifyProducts(chatId);
+  });
+
+  // Commande pour vider le cache (debug)
+  bot.onText(/\/clearcache/, async function(msg) {
+    const chatId = msg.chat.id;
+    if (!isAuthorized(chatId)) return;
+    clubCache.length = 0;
+    processingRows.clear();
+    bot.sendMessage(chatId, '🧹 Cache vidé !');
+    preloadClubLogos();
   });
 
   bot.on('callback_query', handleCallbackQuery);
@@ -666,10 +784,12 @@ async function sendNextLogo(chatId) {
   }
   
   const row = cached.row;
+  const rowIndex = cached.rowIndex;
   const data = cached.data;
   const logos = cached.logos;
   
-  userState.set(chatId, { mode: 'logo', row: row, data: data, logos: logos });
+  // Stocker rowIndex dans le state pour le nettoyage après validation
+  userState.set(chatId, { mode: 'logo', row: row, rowIndex: rowIndex, data: data, logos: logos });
   
   if (logos.length === 0) {
     const keyboard = {
@@ -790,18 +910,21 @@ async function handleCallbackQuery(query) {
       return bot.answerCallbackQuery(query.id, { text: '❌ Tapez /logo d\'abord' });
     }
     const row = state.row;
+    const rowIndex = state.rowIndex;
     const data = state.data;
     const logos = state.logos;
 
     if (action === 'logo_skip') {
       await bot.answerCallbackQuery(query.id, { text: '⏭️ Passé' });
       await updateLogoStatus(row, 'skipped');
+      cleanCache(rowIndex);
       userState.delete(chatId);
       return sendNextLogo(chatId);
     }
     if (action === 'logo_reject') {
       await bot.answerCallbackQuery(query.id, { text: '❌ Logo rejeté' });
       await updateLogoStatus(row, 'rejected');
+      cleanCache(rowIndex);
       await bot.sendMessage(chatId, '❌ *' + data.club + '* logo rejeté', { parse_mode: 'Markdown' });
       userState.delete(chatId);
       setTimeout(function() { sendNextLogo(chatId); }, 500);
@@ -814,7 +937,11 @@ async function handleCallbackQuery(query) {
       }
       await bot.answerCallbackQuery(query.id, { text: '⏳ Création en cours...' });
       
+      // Marquer comme processing AVANT de continuer
       await updateLogoStatus(row, 'processing');
+      
+      // Nettoyer le cache pour ce club
+      cleanCache(rowIndex);
       
       await bot.sendMessage(chatId,
         '⏳ Création de la page Shopify pour *' + data.club + '*...\n' +
@@ -823,6 +950,7 @@ async function handleCallbackQuery(query) {
         { parse_mode: 'Markdown' }
       );
       
+      // Lancer la création en arrière-plan
       createClubShopifyPage(data, selectedLogo.url).then(function(result) {
         if (result.success) {
           updateLogoStatus(row, result.productUrl);
@@ -884,7 +1012,7 @@ export async function startTelegramBot() {
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.3 redémarré !');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.4 redémarré !\n\n✨ Fix: plus de clubs en double');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
