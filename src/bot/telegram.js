@@ -191,8 +191,18 @@ async function findAllLogos(clubName, besportLogo, sport) {
  * Récupère une ligne fraîche depuis le Google Sheet par son numéro
  */
 async function getFreshRow(rowNumber) {
-  const rows = await sheet.getRows();
-  return rows.find(r => r.rowNumber === rowNumber);
+  try {
+    const rows = await sheet.getRows();
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].rowNumber === rowNumber) {
+        return rows[i];
+      }
+    }
+    return null;
+  } catch (error) {
+    console.log('⚠️ Erreur getFreshRow: ' + error.message);
+    return null;
+  }
 }
 
 /**
@@ -314,7 +324,7 @@ function cleanCache(processedRowIndex) {
   }
   
   // Retirer du set de traitement après un délai (laisser le temps à la création Shopify)
-  setTimeout(() => {
+  setTimeout(function() {
     processingRows.delete(processedRowIndex);
   }, 60000); // 1 minute
 }
