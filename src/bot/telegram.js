@@ -44,6 +44,32 @@ let isCacheLoading = false;
 // Set des rowIndex en cours de traitement (pour éviter les doublons)
 const processingRows = new Set();
 
+/**
+ * Échappe les caractères spéciaux Markdown pour éviter les erreurs Telegram
+ */
+function escapeMarkdown(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/_/g, '\\_')
+    .replace(/\*/g, '\\*')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)')
+    .replace(/~/g, '\\~')
+    .replace(/`/g, '\\`')
+    .replace(/>/g, '\\>')
+    .replace(/#/g, '\\#')
+    .replace(/\+/g, '\\+')
+    .replace(/-/g, '\\-')
+    .replace(/=/g, '\\=')
+    .replace(/\|/g, '\\|')
+    .replace(/\{/g, '\\{')
+    .replace(/\}/g, '\\}')
+    .replace(/\./g, '\\.')
+    .replace(/!/g, '\\!');
+}
+
 async function initGoogleSheets() {
   const auth = new JWT({
     email: CONFIG.googleClientEmail,
@@ -715,9 +741,9 @@ async function sendNextEmail(chatId) {
   const googleImagesLink = getGoogleImagesLink(data.club, data.sport);
   const message =
     '📧 *VALIDATION EMAIL*\n\n' +
-    '🏆 *' + data.club + '*\n' +
-    '⚽ Sport: ' + (data.sport || '-') + '\n' +
-    '📍 Ville: ' + (data.ville || '-') + '\n\n' +
+    '🏆 *' + escapeMarkdown(data.club) + '*\n' +
+    '⚽ Sport: ' + escapeMarkdown(data.sport || '-') + '\n' +
+    '📍 Ville: ' + escapeMarkdown(data.ville || '-') + '\n\n' +
     '📧 *Email:* `' + data.email + '`\n\n' +
     '🔗 [Page Shopify](' + data.shopifyUrl + ')\n' +
     '🔍 [Google Images](' + googleImagesLink + ')';
@@ -771,8 +797,8 @@ async function sendNextLogo(chatId) {
       ]
     };
     return bot.sendMessage(chatId,
-      '🏆 *' + data.club + '*\n' +
-      '⚽ ' + (data.sport || '-') + ' | 📍 ' + (data.ville || '-') + '\n\n' +
+      '🏆 *' + escapeMarkdown(data.club) + '*\n' +
+      '⚽ ' + escapeMarkdown(data.sport || '-') + ' | 📍 ' + escapeMarkdown(data.ville || '-') + '\n\n' +
       '❌ *Aucun logo valide trouvé*\n\n' +
       '🔍 [Chercher manuellement](' + getGoogleImagesLink(data.club, data.sport) + ')\n\n' +
       '📦 Cache: ' + clubCache.length + ' clubs restants',
@@ -809,8 +835,8 @@ async function sendNextLogo(chatId) {
   const keyboard = { inline_keyboard: buttonRows };
   
   await bot.sendMessage(chatId,
-    '🏆 *' + data.club + '*\n' +
-    '⚽ ' + (data.sport || '-') + ' | 📍 ' + (data.ville || '-') + '\n\n' +
+    '🏆 *' + escapeMarkdown(data.club) + '*\n' +
+    '⚽ ' + escapeMarkdown(data.sport || '-') + ' | 📍 ' + escapeMarkdown(data.ville || '-') + '\n\n' +
     '📸 *' + logos.length + ' logo(s) trouvé(s)*\n\n' +
     '👆 *Choisis le meilleur logo:*\n\n' +
     '📦 Cache: ' + clubCache.length + ' clubs restants',
@@ -842,7 +868,7 @@ async function handleCallbackQuery(query) {
       if (brevoResult.success) {
         row.set('Status', 'sent');
         await row.save();
-        await bot.sendMessage(chatId, '✅ *' + data.club + '* ajouté à Brevo !', { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, '✅ *' + escapeMarkdown(data.club) + '* ajouté à Brevo !', { parse_mode: 'Markdown' });
       } else {
         await bot.sendMessage(chatId, '⚠️ Erreur Brevo: ' + brevoResult.error);
       }
@@ -853,7 +879,7 @@ async function handleCallbackQuery(query) {
       await bot.answerCallbackQuery(query.id, { text: '❌ Marqué invalide' });
       row.set('Status', 'invalid');
       await row.save();
-      await bot.sendMessage(chatId, '❌ *' + data.club + '* marqué invalide', { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, '❌ *' + escapeMarkdown(data.club) + '* marqué invalide', { parse_mode: 'Markdown' });
       userState.delete(chatId);
       setTimeout(function() { sendNextEmail(chatId); }, 500);
     }
@@ -869,7 +895,7 @@ async function handleCallbackQuery(query) {
       row.set('Statut_Shopify', '');
       row.set('Status', 'deleted');
       await row.save();
-      await bot.sendMessage(chatId, '🗑️ *' + data.club + '* supprimé', { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, '🗑️ *' + escapeMarkdown(data.club) + '* supprimé', { parse_mode: 'Markdown' });
       userState.delete(chatId);
       setTimeout(function() { sendNextEmail(chatId); }, 500);
     }
@@ -895,7 +921,7 @@ async function handleCallbackQuery(query) {
       await bot.answerCallbackQuery(query.id, { text: '❌ Logo rejeté' });
       await updateLogoStatus(row, 'rejected');
       cleanCache(rowIndex);
-      await bot.sendMessage(chatId, '❌ *' + data.club + '* logo rejeté', { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, '❌ *' + escapeMarkdown(data.club) + '* logo rejeté', { parse_mode: 'Markdown' });
       userState.delete(chatId);
       setTimeout(function() { sendNextLogo(chatId); }, 500);
     }
@@ -914,10 +940,9 @@ async function handleCallbackQuery(query) {
       cleanCache(rowIndex);
       
       await bot.sendMessage(chatId,
-        '⏳ Création de la page Shopify pour *' + data.club + '*...\n' +
+        '⏳ Création de la page Shopify pour ' + data.club + '...\n' +
         '📸 Logo: ' + selectedLogo.source + '\n' +
-        '_(génération visuels + produit, ~2-3 min)_',
-        { parse_mode: 'Markdown' }
+        '(génération visuels + produit, ~2-3 min)'
       );
       
       // Lancer la création en arrière-plan
@@ -925,9 +950,8 @@ async function handleCallbackQuery(query) {
         if (result.success) {
           updateLogoStatus(row, result.productUrl);
           bot.sendMessage(chatId,
-            '✅ *' + data.club + '* page créée !\n\n' +
-            '🔗 [Voir la page](' + result.productUrl + ')',
-            { parse_mode: 'Markdown' }
+            '✅ ' + data.club + ' page créée !\n\n' +
+            '🔗 Voir la page: ' + result.productUrl
           );
         } else {
           updateLogoStatus(row, 'error: ' + result.error);
