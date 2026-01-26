@@ -15,7 +15,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_REPO = 'OhLaPey/planning-urbansoccer';
 
-// Liste complète des employés
+// Liste complète des employés (dans l'ordre du tableau)
 const ALL_EMPLOYEES = [
     'BONILLO Matthieu', 'BOULARDET Lucas', 'CARRERE Peïo', 'CASTELLON Pascaline',
     'COHAT Linda', 'CRUZEL Quentin', 'DE NOUEL Maxime', 'DIVIEN Yohan',
@@ -73,7 +73,6 @@ export async function startPlanningBot() {
     planningBot = new TelegramBot(PLANNING_BOT_TOKEN, { polling: true });
     console.log('✅ Planning Bot Urban 7D démarré');
 
-    // Commande /start
     planningBot.onText(/\/start/, (msg) => {
         const chatId = msg.chat.id;
         planningBot.sendMessage(chatId, 
@@ -83,7 +82,6 @@ export async function startPlanningBot() {
         );
     });
 
-    // Réception d'un document (PDF)
     planningBot.on('document', async (msg) => {
         const chatId = msg.chat.id;
         const document = msg.document;
@@ -100,7 +98,6 @@ export async function startPlanningBot() {
             const fileLink = await planningBot.getFileLink(document.file_id);
             const pdfResponse = await axios.get(fileLink, { responseType: 'arraybuffer' });
             
-            // Sauvegarder temporairement
             const tempDir = os.tmpdir();
             const timestamp = Date.now();
             const pdfPath = path.join(tempDir, `planning_${timestamp}.pdf`);
@@ -120,76 +117,106 @@ export async function startPlanningBot() {
             const imageBuffer = fs.readFileSync(imagePath);
             const base64Image = imageBuffer.toString('base64');
 
-            await planningBot.sendMessage(chatId, '🤖 Étape 1/2 : Lecture du planning...');
-
-            // Appeler Gemini Vision - ÉTAPE 1 : Lecture simple
+            // Initialiser Gemini avec le modèle PRO
             const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+            const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
-            const prompt1 = `Tu dois lire ce planning de travail. C'est un tableau avec :
-- En-tête : numéro de semaine, année, et les 7 jours avec leurs dates
-- Colonne gauche : noms des employés (NOM Prénom)
-- Chaque ligne horizontale = un employé avec sa couleur de fond unique
-- Dans chaque cellule : des créneaux au format CODE HH:MM/HH:MM
+            // ÉTAPE 1 : Récupérer les métadonnées
+            await planningBot.sendMessage(chatId, '🤖 Analyse des métadonnées...');
+            
+            const metaPrompt = `Regarde ce planning et donne-moi UNIQUEMENT ces informations :
+SEMAINE: <numéro>
+ANNEE: <année>
+JOURS: <liste des jours avec dates, ex: Lu 26, Ma 27, Me 28, Je 29, Ve 30, Sa 31, Di 1>
+MOIS_DEBUT: <mois du premier jour, 1-12>
+MOIS_FIN: <mois du dernier jour, 1-12>
 
-LISTE DES EMPLOYÉS À TROUVER :
-${ALL_EMPLOYEES.join(', ')}
+Réponds UNIQUEMENT avec ces 5 lignes, rien d'autre.`;
+
+            const metaResult = await model.generateContent([
+                metaPrompt,
+                { inlineData: { mimeType: 'image/png', data: base64Image } }
+            ]);
+            
+            const metaText = metaResult.response.text();
+            console.log('📋 Metadata:', metaText);
+            
+            const metadata = parseMetadata(metaText);
+
+            // ÉTAPE 2 : Analyser par blocs de 6 employés
+            const blocks = [
+                ALL_EMPLOYEES.slice(0, 6),   // BONILLO -> CRUZEL
+                ALL_EMPLOYEES.slice(6, 12),  // DE NOUEL -> JARGUEL
+                ALL_EMPLOYEES.slice(12, 18), // KABUNDA -> PUJOL
+                ALL_EMPLOYEES.slice(18, 22)  // RABII -> TOPPAN
+            ];
+
+            let allEmployeesData = {};
+
+            for (let i = 0; i < blocks.length; i++) {
+                const block = blocks[i];
+                await planningBot.sendMessage(chatId, `🔍 Analyse bloc ${i + 1}/${blocks.length} (${block[0].split(' ')[0]} → ${block[block.length-1].split(' ')[0]})...`);
+
+                const blockPrompt = `Tu dois lire ce planning de travail. 
+                
+CONCENTRE-TOI UNIQUEMENT sur ces ${block.length} employés :
+${block.join('\n')}
+
+Pour CHAQUE employé de cette liste, lis SA LIGNE HORIZONTALE (identifiée par sa couleur de fond unique).
+
+Les jours sont : ${metadata.jours.map((j, idx) => ['Lu', 'Ma', 'Me', 'Je', 'Ve', 'Sa', 'Di'][idx] + ' ' + j).join(', ')}
 
 CODES POSSIBLES : VDC, EDF-A, EDF-B, EDF-C, C-PAD, PAD-A, CUP-R, CUP-L, L-REG, L-ARB, REU, ANNIV, AIDE, EV-RE, EV-LO, FORE, FORP
 
-=== TÂCHE ===
-Lis le tableau ligne par ligne et écris ce que tu vois pour CHAQUE employé.
-
-Format de sortie EXACT (une ligne par employé) :
-SEMAINE: <num>
-ANNEE: <année>
-JOURS: <jour1> <date1>, <jour2> <date2>, ... (ex: Lu 26, Ma 27, Me 28, Je 29, Ve 30, Sa 31, Di 1)
-MOIS_DEBUT: <mois du premier jour en chiffre 1-12>
-MOIS_FIN: <mois du dernier jour en chiffre 1-12>
----
+FORMAT DE RÉPONSE (une ligne par employé) :
 NOM Prénom: Jour CODE HH:MM/HH:MM, Jour CODE HH:MM/HH:MM, ...
+ou
 NOM Prénom: REPOS
-...
 
 EXEMPLE :
-SEMAINE: 5
-ANNEE: 2026
-JOURS: Lu 26, Ma 27, Me 28, Je 29, Ve 30, Sa 31, Di 1
-MOIS_DEBUT: 1
-MOIS_FIN: 2
----
 BONILLO Matthieu: Sa EDF-C 09:00/13:00, Di ANNIV 13:45/17:45
 BOULARDET Lucas: REPOS
-CARRERE Peïo: Ma VDC 15:00/18:15, Ma L-REG 18:15/21:45, Me VDC 11:45/19:15, Me L-REG 19:15/21:45
 
 IMPORTANT :
-- Lis HORIZONTALEMENT chaque ligne d'employé
-- La COULEUR de fond délimite les créneaux d'un employé
-- Si un employé n'a AUCUN créneau visible = écris REPOS
-- Écris TOUS les créneaux que tu vois pour chaque employé
-- Utilise les abréviations de jours : Lu, Ma, Me, Je, Ve, Sa, Di`;
+- Lis UNIQUEMENT les ${block.length} employés listés ci-dessus
+- Chaque employé a sa propre COULEUR DE FOND
+- Lis HORIZONTALEMENT de gauche à droite
+- Note TOUS les créneaux visibles dans la ligne de chaque employé
+- Si la ligne est vide = REPOS
 
-            const result1 = await model.generateContent([
-                prompt1,
-                {
-                    inlineData: {
-                        mimeType: 'image/png',
-                        data: base64Image
-                    }
+Réponds UNIQUEMENT avec les ${block.length} lignes, une par employé.`;
+
+                try {
+                    const blockResult = await model.generateContent([
+                        blockPrompt,
+                        { inlineData: { mimeType: 'image/png', data: base64Image } }
+                    ]);
+                    
+                    const blockText = blockResult.response.text();
+                    console.log(`📋 Block ${i + 1} response:`, blockText);
+                    
+                    const blockData = parseEmployeesBlock(blockText, metadata.jours, block);
+                    allEmployeesData = { ...allEmployeesData, ...blockData };
+                    
+                    // Petit délai pour éviter le rate limiting
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    
+                } catch (blockError) {
+                    console.error(`❌ Erreur bloc ${i + 1}:`, blockError.message);
+                    // Continuer avec les autres blocs
                 }
-            ]);
-
-            const responseText = result1.response.text();
-            console.log('📋 Gemini raw response:', responseText);
-
-            await planningBot.sendMessage(chatId, '🔄 Étape 2/2 : Structuration des données...');
-
-            // ÉTAPE 2 : Parser le texte en données structurées
-            const planningData = parseGeminiResponse(responseText);
-            
-            if (!planningData) {
-                throw new Error('Impossible de parser la réponse. Réessayez.');
             }
+
+            // Construire planningData
+            const planningData = {
+                semaine: metadata.semaine,
+                annee: metadata.annee,
+                date_debut: metadata.date_debut,
+                date_fin: metadata.date_fin,
+                jours: metadata.jours,
+                mois_jours: metadata.mois_jours,
+                employes: allEmployeesData
+            };
 
             const employesActifs = Object.keys(planningData.employes).filter(
                 e => Object.keys(planningData.employes[e]).length > 0
@@ -197,7 +224,6 @@ IMPORTANT :
             const nbEmployes = employesActifs.length;
             const semaine = planningData.semaine;
             
-            // Compter le nombre total de créneaux
             let totalCreneaux = 0;
             for (const emp of Object.values(planningData.employes)) {
                 for (const jour of Object.values(emp)) {
@@ -213,18 +239,17 @@ IMPORTANT :
                 `📝 Génération des fichiers iCal...`
             );
 
-            // Récupérer la liste des semaines existantes
+            // Récupérer semaines existantes
             let existingWeeks = await getExistingWeeks();
             if (!existingWeeks.includes(semaine)) {
                 existingWeeks.push(semaine);
                 existingWeeks.sort((a, b) => a - b);
             }
 
-            // Générer les fichiers ICS
+            // Générer les fichiers
             const icsFiles = generateAllICS(planningData);
             const nbFichiers = Object.keys(icsFiles).length;
             
-            // Sauvegarder les données de la semaine
             const weekDataFile = `data/S${semaine}.json`;
             const weekData = {
                 semaine,
@@ -234,13 +259,11 @@ IMPORTANT :
                 employesActifs: employesActifs
             };
             
-            // Générer les pages HTML
             const indexHtml = generateWeekHtml(planningData, employesActifs, existingWeeks);
             const weekHtml = generateWeekHtml(planningData, employesActifs, existingWeeks);
             
             await planningBot.sendMessage(chatId, `📤 Upload sur GitHub (${nbFichiers} fichiers + pages web)...`);
 
-            // Upload sur GitHub
             const filesToUpload = {
                 ...icsFiles,
                 'index.html': indexHtml,
@@ -250,7 +273,7 @@ IMPORTANT :
             
             await uploadToGitHub(filesToUpload, semaine);
 
-            // Envoyer le message final
+            // Message final
             const siteUrl = 'https://planning-urbansoccer.onrender.com';
             
             const employesRepos = ALL_EMPLOYEES.filter(e => {
@@ -288,104 +311,104 @@ IMPORTANT :
     return planningBot;
 }
 
-function parseGeminiResponse(text) {
-    try {
-        const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-        
-        let semaine = null;
-        let annee = null;
-        let jours = [];
-        let moisDebut = 1;
-        let moisFin = 1;
-        let employes = {};
-        let parsingEmployees = false;
-        
-        for (const line of lines) {
-            // Parse metadata
-            if (line.startsWith('SEMAINE:')) {
-                semaine = parseInt(line.replace('SEMAINE:', '').trim());
-            } else if (line.startsWith('ANNEE:')) {
-                annee = parseInt(line.replace('ANNEE:', '').trim());
-            } else if (line.startsWith('JOURS:')) {
-                const joursStr = line.replace('JOURS:', '').trim();
-                const joursMatch = joursStr.match(/\d+/g);
-                if (joursMatch) {
-                    jours = joursMatch.map(j => parseInt(j));
-                }
-            } else if (line.startsWith('MOIS_DEBUT:')) {
-                moisDebut = parseInt(line.replace('MOIS_DEBUT:', '').trim());
-            } else if (line.startsWith('MOIS_FIN:')) {
-                moisFin = parseInt(line.replace('MOIS_FIN:', '').trim());
-            } else if (line === '---') {
-                parsingEmployees = true;
-            } else if (parsingEmployees && line.includes(':')) {
-                // Parse employee line
-                const colonIndex = line.indexOf(':');
-                const employeeName = line.substring(0, colonIndex).trim();
-                const creneauxStr = line.substring(colonIndex + 1).trim();
-                
-                // Vérifier si c'est un employé connu
-                const matchedEmployee = ALL_EMPLOYEES.find(e => {
-                    const eNorm = e.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-                    const nameNorm = employeeName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-                    return eNorm === nameNorm || eNorm.split(' ')[0] === nameNorm.split(' ')[0];
-                });
-                
-                if (matchedEmployee) {
-                    if (creneauxStr.toUpperCase() === 'REPOS' || creneauxStr === '-' || creneauxStr === '') {
-                        employes[matchedEmployee] = {};
-                    } else {
-                        employes[matchedEmployee] = parseCreneaux(creneauxStr, jours, moisDebut, moisFin);
-                    }
-                }
+function parseMetadata(text) {
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+    
+    let semaine = 1, annee = 2026, jours = [], moisDebut = 1, moisFin = 1;
+    
+    for (const line of lines) {
+        if (line.startsWith('SEMAINE:')) {
+            semaine = parseInt(line.replace('SEMAINE:', '').trim()) || 1;
+        } else if (line.startsWith('ANNEE:')) {
+            annee = parseInt(line.replace('ANNEE:', '').trim()) || 2026;
+        } else if (line.startsWith('JOURS:')) {
+            const joursStr = line.replace('JOURS:', '').trim();
+            const joursMatch = joursStr.match(/\d+/g);
+            if (joursMatch) {
+                jours = joursMatch.map(j => parseInt(j));
             }
+        } else if (line.startsWith('MOIS_DEBUT:')) {
+            moisDebut = parseInt(line.replace('MOIS_DEBUT:', '').trim()) || 1;
+        } else if (line.startsWith('MOIS_FIN:')) {
+            moisFin = parseInt(line.replace('MOIS_FIN:', '').trim()) || 1;
         }
-        
-        // Générer mois_jours
-        const mois_jours = jours.map((j, idx) => {
-            // Si le jour est plus petit que le précédent, on est passé au mois suivant
-            if (idx > 0 && j < jours[idx - 1]) {
-                return moisFin;
-            }
-            return moisDebut;
-        });
-        
-        // Calculer dates
-        const moisNoms = ['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 
-                         'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
-        const date_debut = jours.length > 0 ? `${jours[0]} ${moisNoms[moisDebut]}` : '';
-        const date_fin = jours.length > 0 ? `${jours[jours.length - 1]} ${moisNoms[moisFin]}` : '';
-        
-        return {
-            semaine: semaine || 1,
-            annee: annee || 2026,
-            date_debut,
-            date_fin,
-            jours,
-            mois_jours,
-            employes
-        };
-    } catch (e) {
-        console.error('Erreur parsing:', e);
-        return null;
     }
+    
+    // Générer mois_jours
+    const mois_jours = jours.map((j, idx) => {
+        if (idx > 0 && j < jours[idx - 1]) {
+            return moisFin;
+        }
+        return moisDebut;
+    });
+    
+    const moisNoms = ['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 
+                     'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+    
+    return {
+        semaine,
+        annee,
+        jours,
+        mois_jours,
+        moisDebut,
+        moisFin,
+        date_debut: jours.length > 0 ? `${jours[0]} ${moisNoms[moisDebut]}` : '',
+        date_fin: jours.length > 0 ? `${jours[jours.length - 1]} ${moisNoms[moisFin]}` : ''
+    };
 }
 
-function parseCreneaux(str, jours, moisDebut, moisFin) {
+function parseEmployeesBlock(text, jours, expectedEmployees) {
+    const result = {};
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+    
+    for (const line of lines) {
+        if (!line.includes(':')) continue;
+        
+        const colonIndex = line.indexOf(':');
+        const employeeName = line.substring(0, colonIndex).trim();
+        const creneauxStr = line.substring(colonIndex + 1).trim();
+        
+        // Matcher avec un employé attendu
+        const matchedEmployee = expectedEmployees.find(e => {
+            const eNorm = e.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            const nameNorm = employeeName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            return eNorm === nameNorm || 
+                   eNorm.split(' ')[0] === nameNorm.split(' ')[0] ||
+                   nameNorm.includes(eNorm.split(' ')[0]);
+        });
+        
+        if (matchedEmployee) {
+            if (creneauxStr.toUpperCase() === 'REPOS' || creneauxStr === '-' || creneauxStr === '') {
+                result[matchedEmployee] = {};
+            } else {
+                result[matchedEmployee] = parseCreneaux(creneauxStr, jours);
+            }
+        }
+    }
+    
+    // Ajouter les employés manquants comme REPOS
+    for (const emp of expectedEmployees) {
+        if (!result[emp]) {
+            result[emp] = {};
+        }
+    }
+    
+    return result;
+}
+
+function parseCreneaux(str, jours) {
     const result = {};
     
-    // Regex pour matcher "Jour CODE HH:MM/HH:MM"
     const regex = /(Lu|Ma|Me|Je|Ve|Sa|Di|Lun|Mar|Mer|Jeu|Ven|Sam|Dim)\s+([A-Z][A-Z0-9\-]+)\s+(\d{1,2}:\d{2})\/(\d{1,2}:\d{2})/gi;
     
     let match;
     while ((match = regex.exec(str)) !== null) {
-        const jourAbbr = match[1];
+        const jourAbbr = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
         const code = match[2].toUpperCase();
         const debut = match[3];
         const fin = match[4];
         
-        // Trouver l'index du jour
-        const jourIndex = JOURS_MAP[jourAbbr] ?? JOURS_MAP[jourAbbr.charAt(0).toUpperCase() + jourAbbr.slice(1).toLowerCase()];
+        const jourIndex = JOURS_MAP[jourAbbr];
         
         if (jourIndex !== undefined && jours[jourIndex] !== undefined) {
             const jourNum = jours[jourIndex].toString();
@@ -394,11 +417,7 @@ function parseCreneaux(str, jours, moisDebut, moisFin) {
                 result[jourNum] = [];
             }
             
-            result[jourNum].push({
-                code: code,
-                debut: debut,
-                fin: fin
-            });
+            result[jourNum].push({ code, debut, fin });
         }
     }
     
@@ -415,12 +434,10 @@ async function getExistingWeeks() {
             }
         });
         
-        const weeks = response.data
+        return response.data
             .filter(f => f.name.match(/^S\d+\.json$/))
             .map(f => parseInt(f.name.replace('S', '').replace('.json', '')))
             .sort((a, b) => a - b);
-        
-        return weeks;
     } catch (e) {
         return [];
     }
@@ -435,21 +452,13 @@ function generateWeekHtml(planningData, employesActifs, allWeeks) {
     
     const weeksTabsHtml = allWeeks.map(w => {
         const isActive = w === semaine;
-        const href = w === semaine ? '#' : `S${w}.html`;
-        return `            <a href="${href}" class="week-tab ${isActive ? 'active' : ''}">S${w}</a>`;
+        return `            <a href="${w === semaine ? '#' : `S${w}.html`}" class="week-tab ${isActive ? 'active' : ''}">S${w}</a>`;
     }).join('\n');
     
     const employeesHtml = ALL_EMPLOYEES.map(emp => {
-        const fileName = emp
-            .toLowerCase()
-            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-            .replace(/\s+/g, '-')
-            .replace(/[^a-z0-9-]/g, '');
-        
+        const fileName = emp.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
         const empNormalise = emp.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        const isActif = employesActifsNormalises.some(e => {
-            return e.split(' ')[0] === empNormalise.split(' ')[0];
-        });
+        const isActif = employesActifsNormalises.some(e => e.split(' ')[0] === empNormalise.split(' ')[0]);
         
         if (isActif) {
             return `            <a href="ics/${fileName}.ics" class="employee">${emp}</a>`;
@@ -468,65 +477,23 @@ function generateWeekHtml(planningData, employesActifs, allWeeks) {
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
+        body { font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); min-height: 100vh; padding: 20px; }
         .container { max-width: 500px; margin: 0 auto; }
         .header { text-align: center; margin-bottom: 20px; padding: 20px; }
         .logo { font-size: 48px; margin-bottom: 10px; }
         h1 { color: #FF6B35; font-size: 28px; font-weight: 700; margin-bottom: 8px; }
         .subtitle { color: #888; font-size: 14px; margin-bottom: 5px; }
-        .dates {
-            color: #FF6B35; font-size: 18px; font-weight: 600;
-            background: rgba(255, 107, 53, 0.1);
-            padding: 10px 20px; border-radius: 20px;
-            display: inline-block; margin-top: 10px;
-        }
-        .week-selector {
-            display: flex; justify-content: center; gap: 8px;
-            margin-bottom: 25px; flex-wrap: wrap;
-        }
-        .week-tab {
-            padding: 10px 18px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 25px; color: #888;
-            text-decoration: none; font-weight: 500; font-size: 14px;
-            transition: all 0.2s ease;
-        }
-        .week-tab:hover {
-            background: rgba(255, 107, 53, 0.1);
-            border-color: rgba(255, 107, 53, 0.3); color: #FF6B35;
-        }
+        .dates { color: #FF6B35; font-size: 18px; font-weight: 600; background: rgba(255, 107, 53, 0.1); padding: 10px 20px; border-radius: 20px; display: inline-block; margin-top: 10px; }
+        .week-selector { display: flex; justify-content: center; gap: 8px; margin-bottom: 25px; flex-wrap: wrap; }
+        .week-tab { padding: 10px 18px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 25px; color: #888; text-decoration: none; font-weight: 500; font-size: 14px; transition: all 0.2s ease; }
+        .week-tab:hover { background: rgba(255, 107, 53, 0.1); border-color: rgba(255, 107, 53, 0.3); color: #FF6B35; }
         .week-tab.active { background: #FF6B35; border-color: #FF6B35; color: white; }
         .employees { display: flex; flex-direction: column; gap: 8px; }
-        .employee {
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 16px 20px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 12px; color: white;
-            text-decoration: none; font-weight: 500;
-            transition: all 0.2s ease;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        a.employee:hover {
-            background: rgba(255, 107, 53, 0.2);
-            border-color: #FF6B35; transform: translateX(5px);
-        }
+        .employee { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; background: rgba(255, 255, 255, 0.05); border-radius: 12px; color: white; text-decoration: none; font-weight: 500; transition: all 0.2s ease; border: 1px solid rgba(255, 255, 255, 0.1); }
+        a.employee:hover { background: rgba(255, 107, 53, 0.2); border-color: #FF6B35; transform: translateX(5px); }
         a.employee::after { content: '📅'; font-size: 20px; }
-        .employee.repos {
-            color: #555;
-            background: rgba(255, 255, 255, 0.02);
-            border-color: rgba(255, 255, 255, 0.05);
-        }
-        .badge {
-            font-size: 11px; padding: 4px 10px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 20px; color: #555; font-weight: 400;
-        }
+        .employee.repos { color: #555; background: rgba(255, 255, 255, 0.02); border-color: rgba(255, 255, 255, 0.05); }
+        .badge { font-size: 11px; padding: 4px 10px; background: rgba(255, 255, 255, 0.1); border-radius: 20px; color: #555; font-weight: 400; }
         .footer { text-align: center; margin-top: 30px; color: #666; font-size: 12px; }
     </style>
 </head>
@@ -544,9 +511,7 @@ ${weeksTabsHtml}
         <div class="employees">
 ${employeesHtml}
         </div>
-        <div class="footer">
-            <p>Cliquez sur votre nom pour ajouter le planning à votre calendrier</p>
-        </div>
+        <div class="footer"><p>Cliquez sur votre nom pour ajouter le planning à votre calendrier</p></div>
     </div>
 </body>
 </html>`;
@@ -589,24 +554,15 @@ END:VTIMEZONE
         const moisJour = jourIndex >= 0 ? mois_jours[jourIndex] : 1;
         
         for (const event of events) {
-            const code = event.code;
-            const description = LEGENDE[code] || code;
-            
+            const description = LEGENDE[event.code] || event.code;
             const [hDebut, mDebut] = event.debut.split(':').map(Number);
             const [hFin, mFin] = event.fin.split(':').map(Number);
             
-            let jourFin = jour;
-            let moisFin = moisJour;
-            let hFinAdjusted = hFin;
-            
-            if (hFin === 24 || hFin === 0) {
-                hFinAdjusted = 0;
-                jourFin = jour + 1;
-            }
+            let jourFin = jour, moisFin = moisJour, hFinAdjusted = hFin;
+            if (hFin === 24 || hFin === 0) { hFinAdjusted = 0; jourFin = jour + 1; }
             
             const dateDebut = `${annee}${String(moisJour).padStart(2, '0')}${String(jour).padStart(2, '0')}T${String(hDebut).padStart(2, '0')}${String(mDebut).padStart(2, '0')}00`;
             const dateFin = `${annee}${String(moisFin).padStart(2, '0')}${String(jourFin).padStart(2, '0')}T${String(hFinAdjusted).padStart(2, '0')}${String(mFin).padStart(2, '0')}00`;
-            
             const uid = `${employeeName.toLowerCase().replace(/\s+/g, '-').normalize('NFD').replace(/[\u0300-\u036f]/g, '')}-s${semaine}-${eventId}@urban7d`;
             
             ics += `BEGIN:VEVENT
@@ -632,14 +588,8 @@ function generateAllICS(planningData) {
     for (const [employeeName, creneaux] of Object.entries(planningData.employes)) {
         if (Object.keys(creneaux).length === 0) continue;
         
-        const fileName = employeeName
-            .toLowerCase()
-            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-            .replace(/\s+/g, '-')
-            .replace(/[^a-z0-9-]/g, '');
-        
-        const icsContent = generateICS(employeeName, creneaux, planningData);
-        files[`ics/${fileName}.ics`] = icsContent;
+        const fileName = employeeName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+        files[`ics/${fileName}.ics`] = generateICS(employeeName, creneaux, planningData);
     }
     
     return files;
@@ -656,28 +606,16 @@ async function uploadToGitHub(files, semaine) {
             let sha = null;
             try {
                 const existingFile = await axios.get(url, {
-                    headers: {
-                        'Authorization': `token ${GITHUB_TOKEN}`,
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
+                    headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' }
                 });
                 sha = existingFile.data.sha;
             } catch (e) {}
             
-            const data = {
-                message: `Mise à jour planning S${semaine}`,
-                content: contentBase64
-            };
-            
-            if (sha) {
-                data.sha = sha;
-            }
+            const data = { message: `Mise à jour planning S${semaine}`, content: contentBase64 };
+            if (sha) data.sha = sha;
             
             await axios.put(url, data, {
-                headers: {
-                    'Authorization': `token ${GITHUB_TOKEN}`,
-                    'Accept': 'application/vnd.github.v3+json'
-                }
+                headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' }
             });
             
             console.log(`✅ Planning: Uploaded ${filePath}`);
