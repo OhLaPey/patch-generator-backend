@@ -1,14 +1,12 @@
 /**
- * PPATCH - Bot Telegram Unifié v5.4
+ * PPATCH - Bot Telegram Unifié v5.5
  * - /logo : Valider logos + créer pages
  * - /mail : Valider emails
  * - /sync : Synchroniser avec Shopify
  * - /stats : Statistiques
  * 
  * FIX v5.4: Correction du bug de réapparition des clubs validés
- * - Le cache stocke maintenant rowIndex au lieu de l'objet row
- * - Vérification fraîche du statut avant affichage
- * - Nettoyage du cache après validation
+ * FIX v5.5: Suppression Wikipedia (toujours 403)
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -78,42 +76,7 @@ async function isValidImageUrl(url) {
   }
 }
 
-async function searchLogoWikipedia(clubName) {
-  try {
-    const searchUrl = 'https://fr.wikipedia.org/w/api.php?action=query&list=search&srsearch=' + encodeURIComponent(clubName) + '&format=json&origin=*';
-    const searchRes = await axios.get(searchUrl, { timeout: 5000 });
-    if (searchRes.data.query?.search?.length > 0) {
-      const pageTitle = searchRes.data.query.search[0].title;
-      const imagesUrl = 'https://fr.wikipedia.org/w/api.php?action=query&titles=' + encodeURIComponent(pageTitle) + '&prop=images&format=json&origin=*';
-      const imagesRes = await axios.get(imagesUrl, { timeout: 5000 });
-      const pages = imagesRes.data.query?.pages;
-      if (pages) {
-        const page = Object.values(pages)[0];
-        const images = page.images || [];
-        const logoImage = images.find(function(img) {
-          const title = img.title.toLowerCase();
-          return title.includes('logo') || title.includes('blason') || title.includes('écusson') || title.includes('emblem');
-        });
-        if (logoImage) {
-          const imageInfoUrl = 'https://fr.wikipedia.org/w/api.php?action=query&titles=' + encodeURIComponent(logoImage.title) + '&prop=imageinfo&iiprop=url&format=json&origin=*';
-          const imageInfoRes = await axios.get(imageInfoUrl, { timeout: 5000 });
-          const imagePages = imageInfoRes.data.query?.pages;
-          if (imagePages) {
-            const imagePage = Object.values(imagePages)[0];
-            const imageUrl = imagePage.imageinfo?.[0]?.url || null;
-            if (imageUrl && await isValidImageUrl(imageUrl)) {
-              return imageUrl;
-            }
-          }
-        }
-      }
-    }
-    return null;
-  } catch (error) {
-    console.log('⚠️ Wikipedia error for ' + clubName + ': ' + error.message);
-    return null;
-  }
-}
+
 
 async function searchLogoGoogle(clubName, sport, targetCount) {
   targetCount = targetCount || 6;
@@ -165,6 +128,7 @@ async function searchLogoGoogle(clubName, sport, targetCount) {
 async function findAllLogos(clubName, besportLogo, sport) {
   const logos = [];
   
+  // Logo BeSport
   if (besportLogo && besportLogo.startsWith('http')) {
     const isValid = await isValidImageUrl(besportLogo);
     if (isValid) {
@@ -172,11 +136,7 @@ async function findAllLogos(clubName, besportLogo, sport) {
     }
   }
   
-  const wikiLogo = await searchLogoWikipedia(clubName);
-  if (wikiLogo) {
-    logos.push({ source: 'Wikipedia', url: wikiLogo, emoji: '📚' });
-  }
-  
+  // Logos Google (6 max)
   const googleLogos = await searchLogoGoogle(clubName, sport, 6);
   googleLogos.forEach(function(logo, index) {
     logos.push({ source: 'Google ' + (index + 1), url: logo.url, emoji: '🔍' });
@@ -682,7 +642,7 @@ function setupBotCommands() {
     }
     const stats = await getStats();
     bot.sendMessage(chatId,
-      '🎯 *PPATCH Bot v5.4*\n\n' +
+      '🎯 *PPATCH Bot v5.5*\n\n' +
       '🖼️ *Logos:* ' + stats.pendingLogo + ' à valider | ' + stats.createdLogo + ' créés\n' +
       '📧 *Emails:* ' + stats.pendingEmail + ' à valider | ' + stats.sentEmail + ' envoyés\n\n' +
       '📦 Cache: ' + clubCache.length + ' clubs pré-chargés\n' +
@@ -1022,7 +982,7 @@ export async function startTelegramBot() {
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.4 redémarré !\n\n✨ Fix: plus de clubs en double');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.5 redémarré !\n\n✨ Fix: plus de clubs en double\n🚀 Plus rapide (sans Wikipedia)');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
