@@ -29,7 +29,7 @@ const PLANNING_BOT_TOKEN = process.env.PLANNING_BOT_TOKEN;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_REPO = 'OhLaPey/planning-urbansoccer';
 
-// Liste complète des employés (dans l'ordre du tableau)
+// Liste complète des employés
 const ALL_EMPLOYEES = [
     'BONILLO Matthieu', 'BOULARDET Lucas', 'CARRERE Peïo', 'CASTELLON Pascaline',
     'COHAT Linda', 'CRUZEL Quentin', 'DE NOUEL Maxime', 'DIVIEN Yohan',
@@ -73,7 +73,6 @@ export async function startPlanningBot() {
         return null;
     }
 
-    // S'assurer que pandas est installé
     await ensurePythonDeps();
 
     planningBot = new TelegramBot(PLANNING_BOT_TOKEN, { polling: true });
@@ -94,7 +93,6 @@ export async function startPlanningBot() {
         const document = msg.document;
         const fileName = document.file_name.toLowerCase();
 
-        // Vérifier le type de fichier
         if (!fileName.endsWith('.xlsx') && !fileName.endsWith('.xls')) {
             planningBot.sendMessage(chatId, '❌ Veuillez envoyer un fichier Excel (.xlsx)');
             return;
@@ -103,29 +101,26 @@ export async function startPlanningBot() {
         const statusMsg = await planningBot.sendMessage(chatId, '📥 Fichier Excel reçu, traitement en cours...');
 
         try {
-            // Télécharger le fichier
             const fileLink = await planningBot.getFileLink(document.file_id);
             const fileResponse = await axios.get(fileLink, { responseType: 'arraybuffer' });
             
             const tempDir = os.tmpdir();
             const timestamp = Date.now();
-            const xlsxPath = path.join(tempDir, `planning_${timestamp}.xlsx`);
+            const xlsxPath = path.join(tempDir, 'planning_' + timestamp + '.xlsx');
             fs.writeFileSync(xlsxPath, fileResponse.data);
 
             await planningBot.editMessageText('📊 Parsing du fichier Excel...', { chat_id: chatId, message_id: statusMsg.message_id });
 
-            // Parser le fichier Excel avec Python
             const pythonScript = generatePythonParser(xlsxPath);
-            const scriptPath = path.join(tempDir, `parser_${timestamp}.py`);
+            const scriptPath = path.join(tempDir, 'parser_' + timestamp + '.py');
             fs.writeFileSync(scriptPath, pythonScript);
 
-            const { stdout, stderr } = await execAsync(`python3 ${scriptPath}`);
+            const { stdout, stderr } = await execAsync('python3 ' + scriptPath);
             
             if (stderr && !stderr.includes('UserWarning')) {
                 console.error('Python stderr:', stderr);
             }
 
-            // Parser le résultat JSON
             const result = JSON.parse(stdout);
             
             if (result.error) {
@@ -135,13 +130,12 @@ export async function startPlanningBot() {
             const { semaine, annee, mois_debut, mois_fin, jours, planning } = result;
 
             await planningBot.editMessageText(
-                `✅ Planning S${semaine} parsé!\n` +
-                `📅 ${jours[0]} ${MOIS_NOMS[mois_debut]} - ${jours[6]} ${MOIS_NOMS[mois_fin]}\n` +
-                `📊 Génération des fichiers...`,
+                '✅ Planning S' + semaine + ' parsé!\n' +
+                '📅 ' + jours[0] + ' ' + MOIS_NOMS[mois_debut] + ' - ' + jours[6] + ' ' + MOIS_NOMS[mois_fin] + '\n' +
+                '📊 Génération des fichiers...',
                 { chat_id: chatId, message_id: statusMsg.message_id }
             );
 
-            // Construire planningData
             const mois_jours = jours.map((j, idx) => {
                 if (idx > 0 && j < jours[idx - 1]) return mois_fin;
                 return mois_debut;
@@ -150,14 +144,13 @@ export async function startPlanningBot() {
             const planningData = {
                 semaine,
                 annee,
-                date_debut: `${jours[0]} ${MOIS_NOMS[mois_debut]}`,
-                date_fin: `${jours[6]} ${MOIS_NOMS[mois_fin]}`,
+                date_debut: jours[0] + ' ' + MOIS_NOMS[mois_debut],
+                date_fin: jours[6] + ' ' + MOIS_NOMS[mois_fin],
                 jours,
                 mois_jours,
                 employes: planning
             };
 
-            // Compter employés actifs et créneaux
             const employesActifs = Object.keys(planning).filter(
                 e => Object.keys(planning[e]).length > 0 && 
                      Object.values(planning[e]).some(arr => arr.length > 0)
@@ -171,26 +164,24 @@ export async function startPlanningBot() {
             }
 
             await planningBot.editMessageText(
-                `✅ Planning S${semaine} analysé!\n` +
-                `📅 ${planningData.date_debut} - ${planningData.date_fin}\n` +
-                `👥 ${employesActifs.length} employés actifs\n` +
-                `📊 ${totalCreneaux} créneaux détectés\n\n` +
-                `📝 Génération des fichiers iCal...`,
+                '✅ Planning S' + semaine + ' analysé!\n' +
+                '📅 ' + planningData.date_debut + ' - ' + planningData.date_fin + '\n' +
+                '👥 ' + employesActifs.length + ' employés actifs\n' +
+                '📊 ' + totalCreneaux + ' créneaux détectés\n\n' +
+                '📝 Génération des fichiers iCal...',
                 { chat_id: chatId, message_id: statusMsg.message_id }
             );
 
-            // Récupérer semaines existantes
             let existingWeeks = await getExistingWeeks();
             if (!existingWeeks.includes(semaine)) {
                 existingWeeks.push(semaine);
                 existingWeeks.sort((a, b) => a - b);
             }
 
-            // Générer les fichiers
             const icsFiles = generateAllICS(planningData, employesActifs);
             const nbFichiers = Object.keys(icsFiles).length;
             
-            const weekDataFile = `data/S${semaine}.json`;
+            const weekDataFile = 'data/S' + semaine + '.json';
             const weekData = {
                 semaine,
                 annee: planningData.annee,
@@ -203,36 +194,34 @@ export async function startPlanningBot() {
             const weekHtml = generateWeekHtml(planningData, employesActifs, existingWeeks);
             
             await planningBot.editMessageText(
-                `📤 Upload sur GitHub (${nbFichiers} fichiers + pages web)...`,
+                '📤 Upload sur GitHub (' + nbFichiers + ' fichiers + pages web)...',
                 { chat_id: chatId, message_id: statusMsg.message_id }
             );
 
             const filesToUpload = {
                 ...icsFiles,
                 'index.html': indexHtml,
-                [`S${semaine}.html`]: weekHtml,
+                ['S' + semaine + '.html']: weekHtml,
                 [weekDataFile]: JSON.stringify(weekData, null, 2)
             };
             
             await uploadToGitHub(filesToUpload, semaine);
 
-            // Message final
             const siteUrl = 'https://planning-urbansoccer.onrender.com';
             const employesRepos = ALL_EMPLOYEES.filter(e => !employesActifs.includes(e));
             
-            let finalMessage = `🎉 Planning S${semaine} publié!\n\n` +
-                `📅 ${planningData.date_debut} → ${planningData.date_fin}\n` +
-                `👥 ${employesActifs.length} actifs / ${ALL_EMPLOYEES.length} total\n` +
-                `📊 ${totalCreneaux} créneaux\n\n` +
-                `🔗 ${siteUrl}\n\n`;
+            let finalMessage = '🎉 Planning S' + semaine + ' publié!\n\n' +
+                '📅 ' + planningData.date_debut + ' → ' + planningData.date_fin + '\n' +
+                '👥 ' + employesActifs.length + ' actifs / ' + ALL_EMPLOYEES.length + ' total\n' +
+                '📊 ' + totalCreneaux + ' créneaux\n\n' +
+                '🔗 ' + siteUrl + '\n\n';
             
             if (employesRepos.length > 0 && employesRepos.length <= 10) {
-                finalMessage += `😴 En repos: ${employesRepos.join(', ')}`;
+                finalMessage += '😴 En repos: ' + employesRepos.join(', ');
             }
             
             await planningBot.sendMessage(chatId, finalMessage);
 
-            // Nettoyer
             try {
                 fs.unlinkSync(xlsxPath);
                 fs.unlinkSync(scriptPath);
@@ -240,7 +229,7 @@ export async function startPlanningBot() {
 
         } catch (error) {
             console.error('Erreur bot planning:', error);
-            planningBot.sendMessage(chatId, `❌ Erreur: ${error.message}`);
+            planningBot.sendMessage(chatId, '❌ Erreur: ' + error.message);
         }
     });
 
@@ -255,16 +244,14 @@ import sys
 import re
 
 try:
-    df = pd.read_excel('${xlsxPath}', header=None)
+    df = pd.read_excel('` + xlsxPath + `', header=None)
     
-    # Extraire métadonnées
     semaine = None
     annee = None
     mois_debut = None
     mois_fin = None
     jours = []
     
-    # Chercher la semaine (ligne 1)
     for idx, row in df.iterrows():
         for cell in row:
             if pd.notna(cell) and isinstance(cell, str):
@@ -274,11 +261,9 @@ try:
                         semaine = int(match.group(1))
                 if any(m in cell for m in ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 
                                             'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre']):
-                    # Extraire année
                     year_match = re.search(r'(\\d{4})', cell)
                     if year_match:
                         annee = int(year_match.group(1))
-                    # Détecter le mois
                     mois_map = {'Janvier': 1, 'Février': 2, 'Mars': 3, 'Avril': 4, 'Mai': 5, 'Juin': 6,
                                'Juillet': 7, 'Août': 8, 'Septembre': 9, 'Octobre': 10, 'Novembre': 11, 'Décembre': 12}
                     for m_name, m_num in mois_map.items():
@@ -289,7 +274,6 @@ try:
         if semaine and annee:
             break
     
-    # Chercher la ligne des jours (contient "Lu", "Ma", etc.)
     jours_row = None
     for idx, row in df.iterrows():
         cell0 = row[0]
@@ -301,20 +285,16 @@ try:
         for col in range(1, 8):
             cell = df.iloc[jours_row, col]
             if pd.notna(cell) and isinstance(cell, str):
-                # Extraire le numéro du jour
                 match = re.search(r'(\\d+)', cell)
                 if match:
                     jours.append(int(match.group(1)))
     
-    # Détecter changement de mois dans les jours
     if len(jours) == 7:
         for i in range(1, 7):
             if jours[i] < jours[i-1]:
-                # Changement de mois après le jour i-1
                 mois_fin = mois_debut + 1 if mois_debut < 12 else 1
                 break
     
-    # Parser le planning
     LEGENDE = ["VDC", "EDF-A", "EDF-B", "EDF-C", "C-PAD", "PAD-A", "CUP-R", "CUP-L", 
                "L-REG", "L-ARB", "REU", "ANNIV", "AIDE", "EV-RE", "EV-LO", "FORE", "FORP", 
                "INVEN", "COMMS"]
@@ -322,7 +302,6 @@ try:
     planning = {}
     employee_rows = {}
     
-    # Identifier les lignes d'employés
     for idx, row in df.iterrows():
         if idx <= jours_row:
             continue
@@ -387,12 +366,12 @@ except Exception as e:
 
 async function getExistingWeeks() {
     try {
-        const url = \`https://api.github.com/repos/\${GITHUB_REPO}/contents/data\`;
+        const url = 'https://api.github.com/repos/' + GITHUB_REPO + '/contents/data';
         const response = await axios.get(url, {
-            headers: { 'Authorization': \`token \${GITHUB_TOKEN}\`, 'Accept': 'application/vnd.github.v3+json' }
+            headers: { 'Authorization': 'token ' + GITHUB_TOKEN, 'Accept': 'application/vnd.github.v3+json' }
         });
         return response.data
-            .filter(f => f.name.match(/^S\\d+\\.json$/))
+            .filter(f => f.name.match(/^S\d+\.json$/))
             .map(f => parseInt(f.name.replace('S', '').replace('.json', '')))
             .sort((a, b) => a - b);
     } catch (e) {
@@ -405,98 +384,99 @@ function generateWeekHtml(planningData, employesActifs, allWeeks) {
     
     const weeksTabsHtml = allWeeks.map(w => {
         const isActive = w === semaine;
-        return \`            <a href="\${w === semaine ? '#' : \`S\${w}.html\`}" class="week-tab \${isActive ? 'active' : ''}">S\${w}</a>\`;
-    }).join('\\n');
+        const href = w === semaine ? '#' : 'S' + w + '.html';
+        const activeClass = isActive ? 'active' : '';
+        return '            <a href="' + href + '" class="week-tab ' + activeClass + '">S' + w + '</a>';
+    }).join('\n');
     
     const employeesHtml = ALL_EMPLOYEES.map(emp => {
-        const fileName = emp.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').replace(/\\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+        const fileName = emp.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
         const isActif = employesActifs.includes(emp);
         
         if (isActif) {
-            return \`            <a href="ics/\${fileName}.ics" class="employee">\${emp}</a>\`;
+            return '            <a href="ics/' + fileName + '.ics" class="employee">' + emp + '</a>';
         } else {
-            return \`            <div class="employee repos">\${emp} <span class="badge">Repos</span></div>\`;
+            return '            <div class="employee repos">' + emp + ' <span class="badge">Repos</span></div>';
         }
-    }).join('\\n');
+    }).join('\n');
 
-    return \`<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Planning Urban 7D - S\${semaine}</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); min-height: 100vh; padding: 20px; }
-        .container { max-width: 500px; margin: 0 auto; }
-        .header { text-align: center; margin-bottom: 20px; padding: 20px; }
-        .logo { font-size: 48px; margin-bottom: 10px; }
-        h1 { color: #FF6B35; font-size: 28px; font-weight: 700; margin-bottom: 8px; }
-        .subtitle { color: #888; font-size: 14px; margin-bottom: 5px; }
-        .dates { color: #FF6B35; font-size: 18px; font-weight: 600; background: rgba(255, 107, 53, 0.1); padding: 10px 20px; border-radius: 20px; display: inline-block; margin-top: 10px; }
-        .week-selector { display: flex; justify-content: center; gap: 8px; margin-bottom: 25px; flex-wrap: wrap; }
-        .week-tab { padding: 10px 18px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 25px; color: #888; text-decoration: none; font-weight: 500; font-size: 14px; transition: all 0.2s ease; }
-        .week-tab:hover { background: rgba(255, 107, 53, 0.1); border-color: rgba(255, 107, 53, 0.3); color: #FF6B35; }
-        .week-tab.active { background: #FF6B35; border-color: #FF6B35; color: white; }
-        .employees { display: flex; flex-direction: column; gap: 8px; }
-        .employee { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; background: rgba(255, 255, 255, 0.05); border-radius: 12px; color: white; text-decoration: none; font-weight: 500; transition: all 0.2s ease; border: 1px solid rgba(255, 255, 255, 0.1); }
-        a.employee:hover { background: rgba(255, 107, 53, 0.2); border-color: #FF6B35; transform: translateX(5px); }
-        a.employee::after { content: '📅'; font-size: 20px; }
-        .employee.repos { color: #555; background: rgba(255, 255, 255, 0.02); border-color: rgba(255, 255, 255, 0.05); }
-        .badge { font-size: 11px; padding: 4px 10px; background: rgba(255, 255, 255, 0.1); border-radius: 20px; color: #555; font-weight: 400; }
-        .footer { text-align: center; margin-top: 30px; color: #666; font-size: 12px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div class="logo">⚽</div>
-            <h1>Planning Urban 7D</h1>
-            <p class="subtitle">Semaine \${semaine}</p>
-            <div class="dates">\${date_debut || ''} → \${date_fin || ''}</div>
-        </div>
-        <div class="week-selector">
-\${weeksTabsHtml}
-        </div>
-        <div class="employees">
-\${employeesHtml}
-        </div>
-        <div class="footer"><p>Cliquez sur votre nom pour ajouter le planning à votre calendrier</p></div>
-    </div>
-</body>
-</html>\`;
+    return '<!DOCTYPE html>\n' +
+'<html lang="fr">\n' +
+'<head>\n' +
+'    <meta charset="UTF-8">\n' +
+'    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n' +
+'    <title>Planning Urban 7D - S' + semaine + '</title>\n' +
+'    <link rel="preconnect" href="https://fonts.googleapis.com">\n' +
+'    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">\n' +
+'    <style>\n' +
+'        * { margin: 0; padding: 0; box-sizing: border-box; }\n' +
+'        body { font-family: \'Inter\', sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); min-height: 100vh; padding: 20px; }\n' +
+'        .container { max-width: 500px; margin: 0 auto; }\n' +
+'        .header { text-align: center; margin-bottom: 20px; padding: 20px; }\n' +
+'        .logo { font-size: 48px; margin-bottom: 10px; }\n' +
+'        h1 { color: #FF6B35; font-size: 28px; font-weight: 700; margin-bottom: 8px; }\n' +
+'        .subtitle { color: #888; font-size: 14px; margin-bottom: 5px; }\n' +
+'        .dates { color: #FF6B35; font-size: 18px; font-weight: 600; background: rgba(255, 107, 53, 0.1); padding: 10px 20px; border-radius: 20px; display: inline-block; margin-top: 10px; }\n' +
+'        .week-selector { display: flex; justify-content: center; gap: 8px; margin-bottom: 25px; flex-wrap: wrap; }\n' +
+'        .week-tab { padding: 10px 18px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 25px; color: #888; text-decoration: none; font-weight: 500; font-size: 14px; transition: all 0.2s ease; }\n' +
+'        .week-tab:hover { background: rgba(255, 107, 53, 0.1); border-color: rgba(255, 107, 53, 0.3); color: #FF6B35; }\n' +
+'        .week-tab.active { background: #FF6B35; border-color: #FF6B35; color: white; }\n' +
+'        .employees { display: flex; flex-direction: column; gap: 8px; }\n' +
+'        .employee { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; background: rgba(255, 255, 255, 0.05); border-radius: 12px; color: white; text-decoration: none; font-weight: 500; transition: all 0.2s ease; border: 1px solid rgba(255, 255, 255, 0.1); }\n' +
+'        a.employee:hover { background: rgba(255, 107, 53, 0.2); border-color: #FF6B35; transform: translateX(5px); }\n' +
+'        a.employee::after { content: \'📅\'; font-size: 20px; }\n' +
+'        .employee.repos { color: #555; background: rgba(255, 255, 255, 0.02); border-color: rgba(255, 255, 255, 0.05); }\n' +
+'        .badge { font-size: 11px; padding: 4px 10px; background: rgba(255, 255, 255, 0.1); border-radius: 20px; color: #555; font-weight: 400; }\n' +
+'        .footer { text-align: center; margin-top: 30px; color: #666; font-size: 12px; }\n' +
+'    </style>\n' +
+'</head>\n' +
+'<body>\n' +
+'    <div class="container">\n' +
+'        <div class="header">\n' +
+'            <div class="logo">⚽</div>\n' +
+'            <h1>Planning Urban 7D</h1>\n' +
+'            <p class="subtitle">Semaine ' + semaine + '</p>\n' +
+'            <div class="dates">' + (date_debut || '') + ' → ' + (date_fin || '') + '</div>\n' +
+'        </div>\n' +
+'        <div class="week-selector">\n' +
+weeksTabsHtml + '\n' +
+'        </div>\n' +
+'        <div class="employees">\n' +
+employeesHtml + '\n' +
+'        </div>\n' +
+'        <div class="footer"><p>Cliquez sur votre nom pour ajouter le planning à votre calendrier</p></div>\n' +
+'    </div>\n' +
+'</body>\n' +
+'</html>';
 }
 
 function generateICS(employeeName, creneaux, planningData) {
     const { semaine, annee, jours, mois_jours } = planningData;
     
-    let ics = \`BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//Planning Urban 7D//FR
-CALSCALE:GREGORIAN
-METHOD:PUBLISH
-X-WR-CALNAME:Planning \${employeeName}
-X-WR-TIMEZONE:Europe/Paris
-BEGIN:VTIMEZONE
-TZID:Europe/Paris
-BEGIN:STANDARD
-TZOFFSETFROM:+0200
-TZOFFSETTO:+0100
-TZNAME:CET
-DTSTART:19701025T030000
-RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU
-END:STANDARD
-BEGIN:DAYLIGHT
-TZOFFSETFROM:+0100
-TZOFFSETTO:+0200
-TZNAME:CEST
-DTSTART:19700329T020000
-RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU
-END:DAYLIGHT
-END:VTIMEZONE
-\`;
+    let ics = 'BEGIN:VCALENDAR\n' +
+'VERSION:2.0\n' +
+'PRODID:-//Planning Urban 7D//FR\n' +
+'CALSCALE:GREGORIAN\n' +
+'METHOD:PUBLISH\n' +
+'X-WR-CALNAME:Planning ' + employeeName + '\n' +
+'X-WR-TIMEZONE:Europe/Paris\n' +
+'BEGIN:VTIMEZONE\n' +
+'TZID:Europe/Paris\n' +
+'BEGIN:STANDARD\n' +
+'TZOFFSETFROM:+0200\n' +
+'TZOFFSETTO:+0100\n' +
+'TZNAME:CET\n' +
+'DTSTART:19701025T030000\n' +
+'RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU\n' +
+'END:STANDARD\n' +
+'BEGIN:DAYLIGHT\n' +
+'TZOFFSETFROM:+0100\n' +
+'TZOFFSETTO:+0200\n' +
+'TZNAME:CEST\n' +
+'DTSTART:19700329T020000\n' +
+'RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU\n' +
+'END:DAYLIGHT\n' +
+'END:VTIMEZONE\n';
 
     let eventId = 1;
     
@@ -518,7 +498,6 @@ END:VTIMEZONE
             if (hFin >= 24) { 
                 hFinAdjusted = hFin - 24; 
                 jourFin = jour + 1;
-                // Gérer changement de mois
                 const maxJour = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][moisJour - 1];
                 if (jourFin > maxJour) {
                     jourFin = 1;
@@ -526,19 +505,19 @@ END:VTIMEZONE
                 }
             }
             
-            const dateDebut = \`\${annee}\${String(moisJour).padStart(2, '0')}\${String(jour).padStart(2, '0')}T\${String(hDebut).padStart(2, '0')}\${String(mDebut).padStart(2, '0')}00\`;
-            const dateFin = \`\${annee}\${String(moisFin).padStart(2, '0')}\${String(jourFin).padStart(2, '0')}T\${String(hFinAdjusted).padStart(2, '0')}\${String(mFin).padStart(2, '0')}00\`;
-            const uid = \`\${employeeName.toLowerCase().replace(/\\s+/g, '-').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')}-s\${semaine}-\${eventId}@urban7d\`;
+            const pad = (n) => String(n).padStart(2, '0');
+            const dateDebut = annee + pad(moisJour) + pad(jour) + 'T' + pad(hDebut) + pad(mDebut) + '00';
+            const dateFin = annee + pad(moisFin) + pad(jourFin) + 'T' + pad(hFinAdjusted) + pad(mFin) + '00';
+            const uid = employeeName.toLowerCase().replace(/\s+/g, '-').normalize('NFD').replace(/[\u0300-\u036f]/g, '') + '-s' + semaine + '-' + eventId + '@urban7d';
             
-            ics += \`BEGIN:VEVENT
-UID:\${uid}
-DTSTAMP:\${dateDebut}
-DTSTART:\${dateDebut}
-DTEND:\${dateFin}
-SUMMARY:\${description}
-DESCRIPTION:\${description}
-END:VEVENT
-\`;
+            ics += 'BEGIN:VEVENT\n' +
+'UID:' + uid + '\n' +
+'DTSTAMP:' + dateDebut + '\n' +
+'DTSTART:' + dateDebut + '\n' +
+'DTEND:' + dateFin + '\n' +
+'SUMMARY:' + description + '\n' +
+'DESCRIPTION:' + description + '\n' +
+'END:VEVENT\n';
             eventId++;
         }
     }
@@ -554,39 +533,39 @@ function generateAllICS(planningData, employesActifs) {
         const creneaux = planningData.employes[employeeName];
         if (!creneaux || Object.keys(creneaux).length === 0) continue;
         
-        const fileName = employeeName.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').replace(/\\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-        files[\`ics/\${fileName}.ics\`] = generateICS(employeeName, creneaux, planningData);
+        const fileName = employeeName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+        files['ics/' + fileName + '.ics'] = generateICS(employeeName, creneaux, planningData);
     }
     
     return files;
 }
 
 async function uploadToGitHub(files, semaine) {
-    const baseUrl = \`https://api.github.com/repos/\${GITHUB_REPO}/contents\`;
+    const baseUrl = 'https://api.github.com/repos/' + GITHUB_REPO + '/contents';
     
     for (const [filePath, content] of Object.entries(files)) {
-        const url = \`\${baseUrl}/\${filePath}\`;
+        const url = baseUrl + '/' + filePath;
         const contentBase64 = Buffer.from(content).toString('base64');
         
         try {
             let sha = null;
             try {
                 const existingFile = await axios.get(url, {
-                    headers: { 'Authorization': \`token \${GITHUB_TOKEN}\`, 'Accept': 'application/vnd.github.v3+json' }
+                    headers: { 'Authorization': 'token ' + GITHUB_TOKEN, 'Accept': 'application/vnd.github.v3+json' }
                 });
                 sha = existingFile.data.sha;
             } catch (e) {}
             
-            const data = { message: \`Mise à jour planning S\${semaine}\`, content: contentBase64 };
+            const data = { message: 'Mise à jour planning S' + semaine, content: contentBase64 };
             if (sha) data.sha = sha;
             
             await axios.put(url, data, {
-                headers: { 'Authorization': \`token \${GITHUB_TOKEN}\`, 'Accept': 'application/vnd.github.v3+json' }
+                headers: { 'Authorization': 'token ' + GITHUB_TOKEN, 'Accept': 'application/vnd.github.v3+json' }
             });
             
-            console.log(\`✅ Planning: Uploaded \${filePath}\`);
+            console.log('✅ Planning: Uploaded ' + filePath);
         } catch (error) {
-            console.error(\`❌ Planning: Error uploading \${filePath}:\`, error.response?.data || error.message);
+            console.error('❌ Planning: Error uploading ' + filePath + ':', error.response?.data || error.message);
             throw error;
         }
     }
