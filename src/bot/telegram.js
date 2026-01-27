@@ -1,11 +1,11 @@
 /**
- * PPATCH - Bot Telegram Unifié v5.11
+ * PPATCH - Bot Telegram Unifié v5.12
  * - /logo : Valider logos + créer pages
  * - /mail : Valider emails
  * - /sync : Synchroniser avec Shopify
  * - /stats : Statistiques
  * 
- * v5.11: Logs détaillés + timeouts réduits pour trouver le freeze
+ * v5.12: AbortController pour timeout garanti + plus de domaines exclus
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -99,7 +99,7 @@ async function searchLogoFromOfficialSite(clubName, sport) {
     }
     
     // Filtrer pour trouver un vrai site de club (pas facebook, wikipedia, etc.)
-    const excludeDomains = ['facebook.com', 'wikipedia.org', 'instagram.com', 'twitter.com', 'youtube.com', 'fff.fr', 'footmercato', 'transfermarkt', 'besoccer', 'flashscore', 'scorenco.com'];
+    const excludeDomains = ['facebook.com', 'wikipedia.org', 'instagram.com', 'twitter.com', 'youtube.com', 'fff.fr', 'footmercato', 'transfermarkt', 'besoccer', 'flashscore', 'scorenco.com', 'service-public.gouv.fr', 'decathlon.fr', 'globaldetentionproject.org', 'grandsoissons.com', 'google.com', 'bing.com', 'yahoo.com', 'amazon.fr', 'leboncoin.fr', 'linkedin.com', 'pinterest.com', 'pagesjaunes.fr'];
     
     for (let i = 0; i < res.data.items.length; i++) {
       const item = res.data.items[i];
@@ -133,14 +133,23 @@ async function searchLogoFromOfficialSite(clubName, sport) {
  */
 async function extractLogoFromWebsite(siteUrl) {
   console.log('  📥 Téléchargement: ' + siteUrl);
+  
+  // AbortController pour timeout garanti
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+  
   try {
     const response = await axios.get(siteUrl, { 
       timeout: 5000,
+      signal: controller.signal,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
-      maxContentLength: 500000 // Max 500KB pour éviter les gros sites
+      maxContentLength: 300000, // Max 300KB
+      maxBodyLength: 300000
     });
+    
+    clearTimeout(timeoutId);
     
     console.log('  ✅ Page téléchargée (' + (response.data?.length || 0) + ' chars)');
     
@@ -154,7 +163,6 @@ async function extractLogoFromWebsite(siteUrl) {
     const foundUrls = [];
     
     // Pattern 1: WordPress uploads avec logo
-    console.log('  🔎 Recherche pattern WordPress...');
     const wpMatches = html.match(/https?:\/\/[^"'\s]+wp-content\/uploads\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi);
     if (wpMatches) {
       for (let i = 0; i < Math.min(wpMatches.length, 2); i++) {
@@ -164,7 +172,6 @@ async function extractLogoFromWebsite(siteUrl) {
     
     // Pattern 2: Footeo/static logos
     if (foundUrls.length === 0) {
-      console.log('  🔎 Recherche pattern static...');
       const staticMatches = html.match(/https?:\/\/[^"'\s]+static[^"'\s]*\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi);
       if (staticMatches) {
         for (let i = 0; i < Math.min(staticMatches.length, 2); i++) {
@@ -175,8 +182,7 @@ async function extractLogoFromWebsite(siteUrl) {
     
     // Pattern 3: Autres URLs avec logo
     if (foundUrls.length === 0) {
-      console.log('  🔎 Recherche pattern générique...');
-      const logoMatches = html.match(/https?:\/\/[^"'\s]{10,100}logo[^"'\s]{0,50}\.(?:png|jpg|jpeg|webp)/gi);
+      const logoMatches = html.match(/https?:\/\/[^"'\s]{10,80}logo[^"'\s]{0,30}\.(?:png|jpg|jpeg|webp)/gi);
       if (logoMatches) {
         for (let i = 0; i < Math.min(logoMatches.length, 2); i++) {
           if (!logoMatches[i].includes('favicon')) {
@@ -186,27 +192,28 @@ async function extractLogoFromWebsite(siteUrl) {
       }
     }
     
-    console.log('  📋 ' + foundUrls.length + ' URLs candidates');
+    console.log('  📋 ' + foundUrls.length + ' URLs trouvées');
     
-    // Valider et retourner la première URL valide (max 2 tentatives)
-    for (let i = 0; i < Math.min(foundUrls.length, 2); i++) {
-      const logoUrl = foundUrls[i];
-      console.log('  🔗 Validation: ' + logoUrl.substring(0, 60) + '...');
+    // Valider la première URL (1 seule tentative)
+    if (foundUrls.length > 0) {
+      const logoUrl = foundUrls[0];
       try {
         const isValid = await isValidImageUrl(logoUrl);
         if (isValid) {
           console.log('✅ Logo trouvé: ' + logoUrl);
           return logoUrl;
         }
-      } catch (e) {
-        console.log('  ❌ Validation échouée: ' + e.message);
-      }
+      } catch (e) {}
     }
     
-    console.log('  ⚠️ Aucun logo valide trouvé');
     return null;
   } catch (error) {
-    console.log('⚠️ Erreur extraction logo: ' + error.message);
+    clearTimeout(timeoutId);
+    if (error.name === 'CanceledError' || error.code === 'ECONNABORTED') {
+      console.log('  ⏱️ Timeout: ' + siteUrl);
+    } else {
+      console.log('  ⚠️ Erreur: ' + error.message);
+    }
     return null;
   }
 }
@@ -863,7 +870,7 @@ function setupBotCommands() {
     }
     const stats = await getStats();
     bot.sendMessage(chatId,
-      '🎯 PPATCH Bot v5.11\n\n' +
+      '🎯 PPATCH Bot v5.12\n\n' +
       '🖼️ Logos: ' + stats.pendingLogo + ' à valider | ' + stats.createdLogo + ' créés\n' +
       '📧 Emails: ' + stats.pendingEmail + ' à valider | ' + stats.sentEmail + ' envoyés\n\n' +
       '📦 Cache: ' + clubCache.length + ' clubs pré-chargés\n' +
@@ -1240,7 +1247,7 @@ export async function startTelegramBot() {
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.11 redémarré !\n\n🔍 Logs détaillés pour debug');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.12 redémarré !\n\n⏱️ Timeouts garantis (AbortController)');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
