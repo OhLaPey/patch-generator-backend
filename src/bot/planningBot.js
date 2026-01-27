@@ -15,14 +15,30 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_REPO = 'OhLaPey/planning-urbansoccer';
 
-// Liste complète des employés (dans l'ordre du tableau)
+// Liste complète des employés (dans l'ordre du tableau de HAUT en BAS)
 const ALL_EMPLOYEES = [
-    'BONILLO Matthieu', 'BOULARDET Lucas', 'CARRERE Peïo', 'CASTELLON Pascaline',
-    'COHAT Linda', 'CRUZEL Quentin', 'DE NOUEL Maxime', 'DIVIEN Yohan',
-    'DONAER Nicolas', 'DOVINA Théo', 'HEBERT Jean Baptiste', 'JARGUEL Thomas',
-    'KABUNDA NDEKE Marvyn', 'MADIELE Henri', 'MOSTEFA Yanis', 'PEREZ Loic',
-    'PISTORE Remi', 'PUJOL Mathieu', 'RABII Mehdi', 'SEIGNE Kevin',
-    'TINGUY Florian', 'TOPPAN Mattis'
+    'BONILLO Matthieu',      // Ligne 1
+    'BOULARDET Lucas',       // Ligne 2
+    'CARRERE Peïo',          // Ligne 3
+    'CASTELLON Pascaline',   // Ligne 4
+    'COHAT Linda',           // Ligne 5
+    'CRUZEL Quentin',        // Ligne 6
+    'DE NOUEL Maxime',       // Ligne 7
+    'DIVIEN Yohan',          // Ligne 8
+    'DONAER Nicolas',        // Ligne 9
+    'DOVINA Théo',           // Ligne 10
+    'HEBERT Jean Baptiste',  // Ligne 11
+    'JARGUEL Thomas',        // Ligne 12
+    'KABUNDA NDEKE Marvyn',  // Ligne 13
+    'MADIELE Henri',         // Ligne 14
+    'MOSTEFA Yanis',         // Ligne 15
+    'PEREZ Loic',            // Ligne 16
+    'PISTORE Remi',          // Ligne 17
+    'PUJOL Mathieu',         // Ligne 18
+    'RABII Mehdi',           // Ligne 19
+    'SEIGNE Kevin',          // Ligne 20
+    'TINGUY Florian',        // Ligne 21
+    'TOPPAN Mattis'          // Ligne 22
 ];
 
 // Légende des codes d'activité
@@ -78,6 +94,7 @@ export async function startPlanningBot() {
         planningBot.sendMessage(chatId, 
             '👋 Bienvenue sur le Bot Planning Urban 7D!\n\n' +
             '📄 Envoyez-moi le PDF du planning et je génèrerai les fichiers calendrier pour toute l\'équipe.\n\n' +
+            '⏱️ L\'analyse prend environ 2-3 minutes (22 employés à analyser).\n\n' +
             '🔗 Les liens seront disponibles sur:\nhttps://planning-urbansoccer.onrender.com'
         );
     });
@@ -91,7 +108,7 @@ export async function startPlanningBot() {
             return;
         }
 
-        planningBot.sendMessage(chatId, '📥 PDF reçu, analyse en cours...');
+        const statusMsg = await planningBot.sendMessage(chatId, '📥 PDF reçu, analyse en cours...\n⏱️ Temps estimé: 2-3 minutes');
 
         try {
             // Télécharger le PDF
@@ -103,7 +120,7 @@ export async function startPlanningBot() {
             const pdfPath = path.join(tempDir, `planning_${timestamp}.pdf`);
             fs.writeFileSync(pdfPath, pdfResponse.data);
 
-            await planningBot.sendMessage(chatId, '🖼️ Conversion en image HD...');
+            await planningBot.editMessageText('🖼️ Conversion en image HD...', { chat_id: chatId, message_id: statusMsg.message_id });
 
             // Convertir PDF en image HAUTE RÉSOLUTION
             const imagePath = path.join(tempDir, `planning_${timestamp}.png`);
@@ -117,12 +134,12 @@ export async function startPlanningBot() {
             const imageBuffer = fs.readFileSync(imagePath);
             const base64Image = imageBuffer.toString('base64');
 
-            // Initialiser Gemini avec le modèle PRO
+            // Initialiser Gemini
             const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
             const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
             // ÉTAPE 1 : Récupérer les métadonnées
-            await planningBot.sendMessage(chatId, '🤖 Analyse des métadonnées...');
+            await planningBot.editMessageText('🤖 Lecture des métadonnées...', { chat_id: chatId, message_id: statusMsg.message_id });
             
             const metaPrompt = `Regarde ce planning et donne-moi UNIQUEMENT ces informations :
 SEMAINE: <numéro>
@@ -142,68 +159,74 @@ Réponds UNIQUEMENT avec ces 5 lignes, rien d'autre.`;
             console.log('📋 Metadata:', metaText);
             
             const metadata = parseMetadata(metaText);
+            const joursStr = metadata.jours.map((j, idx) => ['Lu', 'Ma', 'Me', 'Je', 'Ve', 'Sa', 'Di'][idx] + ' ' + j).join(', ');
 
-            // ÉTAPE 2 : Analyser par blocs de 6 employés
-            const blocks = [
-                ALL_EMPLOYEES.slice(0, 6),   // BONILLO -> CRUZEL
-                ALL_EMPLOYEES.slice(6, 12),  // DE NOUEL -> JARGUEL
-                ALL_EMPLOYEES.slice(12, 18), // KABUNDA -> PUJOL
-                ALL_EMPLOYEES.slice(18, 22)  // RABII -> TOPPAN
-            ];
-
+            // ÉTAPE 2 : Analyser CHAQUE employé individuellement
             let allEmployeesData = {};
+            let processedCount = 0;
 
-            for (let i = 0; i < blocks.length; i++) {
-                const block = blocks[i];
-                await planningBot.sendMessage(chatId, `🔍 Analyse bloc ${i + 1}/${blocks.length} (${block[0].split(' ')[0]} → ${block[block.length-1].split(' ')[0]})...`);
-
-                const blockPrompt = `Tu dois lire ce planning de travail. 
+            for (let i = 0; i < ALL_EMPLOYEES.length; i++) {
+                const employee = ALL_EMPLOYEES[i];
+                const lineNum = i + 1;
                 
-CONCENTRE-TOI UNIQUEMENT sur ces ${block.length} employés :
-${block.join('\n')}
+                processedCount++;
+                await planningBot.editMessageText(
+                    `🔍 Analyse employé ${processedCount}/${ALL_EMPLOYEES.length}\n👤 ${employee}...`, 
+                    { chat_id: chatId, message_id: statusMsg.message_id }
+                );
 
-Pour CHAQUE employé de cette liste, lis SA LIGNE HORIZONTALE (identifiée par sa couleur de fond unique).
+                const employeePrompt = `Ce planning a 22 lignes d'employés. Je veux UNIQUEMENT les créneaux de la LIGNE ${lineNum} : ${employee}
 
-Les jours sont : ${metadata.jours.map((j, idx) => ['Lu', 'Ma', 'Me', 'Je', 'Ve', 'Sa', 'Di'][idx] + ' ' + j).join(', ')}
+STRUCTURE DU TABLEAU :
+- Colonne 1 (gauche) : Noms des employés
+- Colonnes 2-8 : Les 7 jours de la semaine (${joursStr})
+- Chaque ligne d'employé peut avoir plusieurs créneaux empilés verticalement
+
+LIGNE ${lineNum} - ${employee} :
+Regarde UNIQUEMENT cette ligne (la ${lineNum}ème ligne d'employé après l'en-tête).
+Lis TOUS les créneaux de cette ligne, de gauche à droite (Lundi à Dimanche).
+Un créneau = CODE HH:MM/HH:MM (ex: VDC 09:45/17:30)
 
 CODES POSSIBLES : VDC, EDF-A, EDF-B, EDF-C, C-PAD, PAD-A, CUP-R, CUP-L, L-REG, L-ARB, REU, ANNIV, AIDE, EV-RE, EV-LO, FORE, FORP
 
-FORMAT DE RÉPONSE (une ligne par employé) :
-NOM Prénom: Jour CODE HH:MM/HH:MM, Jour CODE HH:MM/HH:MM, ...
-ou
-NOM Prénom: REPOS
+FORMAT DE RÉPONSE (une seule ligne) :
+${employee}: Lu CODE HH:MM/HH:MM, Ma CODE HH:MM/HH:MM, ...
 
-EXEMPLE :
-BONILLO Matthieu: Sa EDF-C 09:00/13:00, Di ANNIV 13:45/17:45
-BOULARDET Lucas: REPOS
+Si cette ligne n'a AUCUN créneau visible (ligne vide), réponds :
+${employee}: REPOS
 
-IMPORTANT :
-- Lis UNIQUEMENT les ${block.length} employés listés ci-dessus
-- Chaque employé a sa propre COULEUR DE FOND
-- Lis HORIZONTALEMENT de gauche à droite
-- Note TOUS les créneaux visibles dans la ligne de chaque employé
-- Si la ligne est vide = REPOS
-
-Réponds UNIQUEMENT avec les ${block.length} lignes, une par employé.`;
+IMPORTANT : Ne regarde QUE la ligne ${lineNum}, ignore toutes les autres lignes.`;
 
                 try {
-                    const blockResult = await model.generateContent([
-                        blockPrompt,
+                    const empResult = await model.generateContent([
+                        employeePrompt,
                         { inlineData: { mimeType: 'image/png', data: base64Image } }
                     ]);
                     
-                    const blockText = blockResult.response.text();
-                    console.log(`📋 Block ${i + 1} response:`, blockText);
+                    const empText = empResult.response.text().trim();
+                    console.log(`📋 ${employee}:`, empText);
                     
-                    const blockData = parseEmployeesBlock(blockText, metadata.jours, block);
-                    allEmployeesData = { ...allEmployeesData, ...blockData };
+                    // Parser la réponse
+                    const creneaux = parseEmployeeResponse(empText, metadata.jours, employee);
+                    allEmployeesData[employee] = creneaux;
                     
-                    // Petit délai pour éviter le rate limiting
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    // Délai pour éviter rate limiting (Gemini 1.5 Pro = 2 req/min en gratuit)
+                    // En payant c'est 1000 req/min, donc on met un petit délai
+                    await new Promise(resolve => setTimeout(resolve, 500));
                     
-                } catch (blockError) {
-                    console.error(`❌ Erreur bloc ${i + 1}:`, blockError.message);
-                    // Continuer avec les autres blocs
+                } catch (empError) {
+                    console.error(`❌ Erreur ${employee}:`, empError.message);
+                    allEmployeesData[employee] = {};
+                    
+                    // Si rate limit, attendre plus longtemps
+                    if (empError.message.includes('429') || empError.message.includes('quota')) {
+                        console.log('⏳ Rate limit, attente 30s...');
+                        await planningBot.editMessageText(
+                            `⏳ Pause API (rate limit)... Reprise dans 30s\n👤 ${employee}`, 
+                            { chat_id: chatId, message_id: statusMsg.message_id }
+                        );
+                        await new Promise(resolve => setTimeout(resolve, 30000));
+                    }
                 }
             }
 
@@ -231,12 +254,13 @@ Réponds UNIQUEMENT avec les ${block.length} lignes, une par employé.`;
                 }
             }
             
-            await planningBot.sendMessage(chatId, 
+            await planningBot.editMessageText(
                 `✅ Planning S${semaine} analysé!\n` +
-                `📅 ${planningData.date_debut || ''} - ${planningData.date_fin || ''}\n` +
+                `📅 ${planningData.date_debut} - ${planningData.date_fin}\n` +
                 `👥 ${nbEmployes} employés actifs\n` +
                 `📊 ${totalCreneaux} créneaux détectés\n\n` +
-                `📝 Génération des fichiers iCal...`
+                `📝 Génération des fichiers iCal...`,
+                { chat_id: chatId, message_id: statusMsg.message_id }
             );
 
             // Récupérer semaines existantes
@@ -262,7 +286,10 @@ Réponds UNIQUEMENT avec les ${block.length} lignes, une par employé.`;
             const indexHtml = generateWeekHtml(planningData, employesActifs, existingWeeks);
             const weekHtml = generateWeekHtml(planningData, employesActifs, existingWeeks);
             
-            await planningBot.sendMessage(chatId, `📤 Upload sur GitHub (${nbFichiers} fichiers + pages web)...`);
+            await planningBot.editMessageText(
+                `📤 Upload sur GitHub (${nbFichiers} fichiers + pages web)...`,
+                { chat_id: chatId, message_id: statusMsg.message_id }
+            );
 
             const filesToUpload = {
                 ...icsFiles,
@@ -276,16 +303,10 @@ Réponds UNIQUEMENT avec les ${block.length} lignes, une par employé.`;
             // Message final
             const siteUrl = 'https://planning-urbansoccer.onrender.com';
             
-            const employesRepos = ALL_EMPLOYEES.filter(e => {
-                const eNorm = e.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-                return !employesActifs.some(ea => {
-                    const eaNorm = ea.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-                    return eaNorm.split(' ')[0] === eNorm.split(' ')[0];
-                });
-            });
+            const employesRepos = ALL_EMPLOYEES.filter(e => !employesActifs.includes(e));
             
             let finalMessage = `🎉 Planning S${semaine} publié!\n\n` +
-                `📅 ${planningData.date_debut || ''} → ${planningData.date_fin || ''}\n` +
+                `📅 ${planningData.date_debut} → ${planningData.date_fin}\n` +
                 `👥 ${nbEmployes} actifs / ${ALL_EMPLOYEES.length} total\n` +
                 `📊 ${totalCreneaux} créneaux\n\n` +
                 `🔗 ${siteUrl}\n\n`;
@@ -334,11 +355,8 @@ function parseMetadata(text) {
         }
     }
     
-    // Générer mois_jours
     const mois_jours = jours.map((j, idx) => {
-        if (idx > 0 && j < jours[idx - 1]) {
-            return moisFin;
-        }
+        if (idx > 0 && j < jours[idx - 1]) return moisFin;
         return moisDebut;
     });
     
@@ -346,69 +364,38 @@ function parseMetadata(text) {
                      'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
     
     return {
-        semaine,
-        annee,
-        jours,
-        mois_jours,
-        moisDebut,
-        moisFin,
+        semaine, annee, jours, mois_jours, moisDebut, moisFin,
         date_debut: jours.length > 0 ? `${jours[0]} ${moisNoms[moisDebut]}` : '',
         date_fin: jours.length > 0 ? `${jours[jours.length - 1]} ${moisNoms[moisFin]}` : ''
     };
 }
 
-function parseEmployeesBlock(text, jours, expectedEmployees) {
-    const result = {};
-    const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-    
-    for (const line of lines) {
-        if (!line.includes(':')) continue;
-        
-        const colonIndex = line.indexOf(':');
-        const employeeName = line.substring(0, colonIndex).trim();
-        const creneauxStr = line.substring(colonIndex + 1).trim();
-        
-        // Matcher avec un employé attendu
-        const matchedEmployee = expectedEmployees.find(e => {
-            const eNorm = e.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-            const nameNorm = employeeName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-            return eNorm === nameNorm || 
-                   eNorm.split(' ')[0] === nameNorm.split(' ')[0] ||
-                   nameNorm.includes(eNorm.split(' ')[0]);
-        });
-        
-        if (matchedEmployee) {
-            if (creneauxStr.toUpperCase() === 'REPOS' || creneauxStr === '-' || creneauxStr === '') {
-                result[matchedEmployee] = {};
-            } else {
-                result[matchedEmployee] = parseCreneaux(creneauxStr, jours);
-            }
-        }
-    }
-    
-    // Ajouter les employés manquants comme REPOS
-    for (const emp of expectedEmployees) {
-        if (!result[emp]) {
-            result[emp] = {};
-        }
-    }
-    
-    return result;
-}
-
-function parseCreneaux(str, jours) {
+function parseEmployeeResponse(text, jours, employeeName) {
     const result = {};
     
+    // Nettoyer le texte
+    let cleanText = text;
+    if (cleanText.includes(':')) {
+        cleanText = cleanText.substring(cleanText.indexOf(':') + 1).trim();
+    }
+    
+    // Si REPOS
+    if (cleanText.toUpperCase().includes('REPOS') || cleanText === '-' || cleanText === '') {
+        return {};
+    }
+    
+    // Parser les créneaux
     const regex = /(Lu|Ma|Me|Je|Ve|Sa|Di|Lun|Mar|Mer|Jeu|Ven|Sam|Dim)\s+([A-Z][A-Z0-9\-]+)\s+(\d{1,2}:\d{2})\/(\d{1,2}:\d{2})/gi;
     
     let match;
-    while ((match = regex.exec(str)) !== null) {
-        const jourAbbr = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
+    while ((match = regex.exec(cleanText)) !== null) {
+        const jourAbbr = match[1].substring(0, 2);
+        const jourAbbrNorm = jourAbbr.charAt(0).toUpperCase() + jourAbbr.charAt(1).toLowerCase();
         const code = match[2].toUpperCase();
         const debut = match[3];
         const fin = match[4];
         
-        const jourIndex = JOURS_MAP[jourAbbr];
+        const jourIndex = JOURS_MAP[jourAbbrNorm];
         
         if (jourIndex !== undefined && jours[jourIndex] !== undefined) {
             const jourNum = jours[jourIndex].toString();
@@ -428,12 +415,8 @@ async function getExistingWeeks() {
     try {
         const url = `https://api.github.com/repos/${GITHUB_REPO}/contents/data`;
         const response = await axios.get(url, {
-            headers: {
-                'Authorization': `token ${GITHUB_TOKEN}`,
-                'Accept': 'application/vnd.github.v3+json'
-            }
+            headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' }
         });
-        
         return response.data
             .filter(f => f.name.match(/^S\d+\.json$/))
             .map(f => parseInt(f.name.replace('S', '').replace('.json', '')))
@@ -446,10 +429,6 @@ async function getExistingWeeks() {
 function generateWeekHtml(planningData, employesActifs, allWeeks) {
     const { semaine, date_debut, date_fin } = planningData;
     
-    const employesActifsNormalises = employesActifs.map(e => 
-        e.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    );
-    
     const weeksTabsHtml = allWeeks.map(w => {
         const isActive = w === semaine;
         return `            <a href="${w === semaine ? '#' : `S${w}.html`}" class="week-tab ${isActive ? 'active' : ''}">S${w}</a>`;
@@ -457,8 +436,7 @@ function generateWeekHtml(planningData, employesActifs, allWeeks) {
     
     const employeesHtml = ALL_EMPLOYEES.map(emp => {
         const fileName = emp.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-        const empNormalise = emp.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        const isActif = employesActifsNormalises.some(e => e.split(' ')[0] === empNormalise.split(' ')[0]);
+        const isActif = employesActifs.includes(emp);
         
         if (isActif) {
             return `            <a href="ics/${fileName}.ics" class="employee">${emp}</a>`;
