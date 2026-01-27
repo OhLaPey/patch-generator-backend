@@ -1,5 +1,5 @@
 /**
- * PPATCH - Bot Telegram Unifié v5.6
+ * PPATCH - Bot Telegram Unifié v5.7
  * - /logo : Valider logos + créer pages
  * - /mail : Valider emails
  * - /sync : Synchroniser avec Shopify
@@ -8,6 +8,7 @@
  * FIX v5.4: Correction du bug de réapparition des clubs validés
  * FIX v5.5: Suppression Wikipedia (toujours 403)
  * FIX v5.6: Anti-crash (try-catch + gestion erreurs polling + pas de Markdown)
+ * NEW v5.7: Recherche logos améliorée (site officiel + Facebook + Google)
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -79,8 +80,201 @@ async function isValidImageUrl(url) {
 
 
 
+// ============ RECHERCHE DE LOGOS AMÉLIORÉE v5.7 ============
+
+/**
+ * Cherche le site officiel du club et extrait le logo
+ */
+async function searchLogoFromOfficialSite(clubName, sport) {
+  if (!CONFIG.googleApiKey || !CONFIG.googleCx) {
+    return null;
+  }
+  
+  try {
+    // Chercher le site officiel
+    const query = clubName + ' ' + (sport || '') + ' site officiel';
+    const searchUrl = 'https://www.googleapis.com/customsearch/v1?key=' + CONFIG.googleApiKey + '&cx=' + CONFIG.googleCx + '&q=' + encodeURIComponent(query) + '&num=5';
+    
+    const res = await axios.get(searchUrl, { timeout: 10000 });
+    
+    if (!res.data.items || res.data.items.length === 0) {
+      return null;
+    }
+    
+    // Filtrer pour trouver un vrai site de club (pas facebook, wikipedia, etc.)
+    const excludeDomains = ['facebook.com', 'wikipedia.org', 'instagram.com', 'twitter.com', 'youtube.com', 'fff.fr', 'footmercato', 'transfermarkt', 'besoccer', 'flashscore', 'scorenco.com'];
+    
+    for (let i = 0; i < res.data.items.length; i++) {
+      const item = res.data.items[i];
+      const url = item.link;
+      
+      // Vérifier que ce n'est pas un site exclu
+      const isExcluded = excludeDomains.some(function(domain) {
+        return url.includes(domain);
+      });
+      
+      if (isExcluded) continue;
+      
+      // Essayer d'extraire le logo de ce site
+      console.log('🌐 Analyse site: ' + url);
+      const logo = await extractLogoFromWebsite(url);
+      
+      if (logo) {
+        return { url: logo, source: 'Site officiel', siteUrl: url };
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.log('⚠️ Erreur recherche site officiel: ' + error.message);
+    return null;
+  }
+}
+
+/**
+ * Extrait le logo depuis un site web (header, favicon, og:image)
+ */
+async function extractLogoFromWebsite(siteUrl) {
+  try {
+    const response = await axios.get(siteUrl, { 
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    
+    const html = response.data;
+    
+    // Chercher les images logo dans le HTML
+    const logoPatterns = [
+      // WordPress: wp-content/uploads avec logo dans le nom
+      /https?:\/\/[^"'\s]+wp-content\/uploads\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|svg|webp)/gi,
+      // Images avec "logo" dans l'URL
+      /https?:\/\/[^"'\s]+\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|svg|webp)/gi,
+      // og:image (souvent le logo)
+      /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
+      // Images dans le header avec class/id contenant logo
+      /<img[^>]+(?:class|id)=["'][^"']*logo[^"']*["'][^>]+src=["']([^"']+)["']/gi,
+      /<img[^>]+src=["']([^"']+)["'][^>]+(?:class|id)=["'][^"']*logo[^"']*["']/gi,
+    ];
+    
+    const foundUrls = new Set();
+    
+    for (let i = 0; i < logoPatterns.length; i++) {
+      const pattern = logoPatterns[i];
+      let match;
+      
+      // Reset lastIndex for global patterns
+      pattern.lastIndex = 0;
+      
+      while ((match = pattern.exec(html)) !== null) {
+        let logoUrl = match[1] || match[0];
+        
+        // Convertir en URL absolue si nécessaire
+        if (logoUrl.startsWith('//')) {
+          logoUrl = 'https:' + logoUrl;
+        } else if (logoUrl.startsWith('/')) {
+          const baseUrl = new URL(siteUrl);
+          logoUrl = baseUrl.origin + logoUrl;
+        } else if (!logoUrl.startsWith('http')) {
+          continue;
+        }
+        
+        // Exclure les petites icônes et favicons
+        if (logoUrl.includes('favicon') || logoUrl.includes('16x16') || logoUrl.includes('32x32')) {
+          continue;
+        }
+        
+        foundUrls.add(logoUrl);
+      }
+    }
+    
+    // Valider et retourner la première URL valide
+    for (const logoUrl of foundUrls) {
+      const isValid = await isValidImageUrl(logoUrl);
+      if (isValid) {
+        console.log('✅ Logo trouvé: ' + logoUrl);
+        return logoUrl;
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.log('⚠️ Erreur extraction logo: ' + error.message);
+    return null;
+  }
+}
+
+/**
+ * Cherche le logo sur la page Facebook du club
+ */
+async function searchLogoFromFacebook(clubName, sport) {
+  if (!CONFIG.googleApiKey || !CONFIG.googleCx) {
+    return null;
+  }
+  
+  try {
+    // Chercher la page Facebook
+    const query = 'site:facebook.com ' + clubName + ' ' + (sport || '');
+    const searchUrl = 'https://www.googleapis.com/customsearch/v1?key=' + CONFIG.googleApiKey + '&cx=' + CONFIG.googleCx + '&q=' + encodeURIComponent(query) + '&num=3';
+    
+    const res = await axios.get(searchUrl, { timeout: 10000 });
+    
+    if (!res.data.items || res.data.items.length === 0) {
+      return null;
+    }
+    
+    // Trouver une vraie page Facebook (pas un post)
+    for (let i = 0; i < res.data.items.length; i++) {
+      const item = res.data.items[i];
+      const url = item.link;
+      
+      // Vérifier que c'est une page Facebook principale
+      if (url.includes('facebook.com') && !url.includes('/posts/') && !url.includes('/photos/') && !url.includes('/videos/')) {
+        console.log('📘 Page Facebook trouvée: ' + url);
+        
+        // Extraire l'ID ou nom de la page
+        const pageMatch = url.match(/facebook\.com\/([^\/\?]+)/);
+        if (pageMatch) {
+          const pageName = pageMatch[1];
+          
+          // Essayer de récupérer la photo de profil via l'API Graph (public)
+          // Note: Cette méthode ne fonctionne que pour les pages publiques
+          const profilePicUrl = 'https://graph.facebook.com/' + pageName + '/picture?type=large&redirect=false';
+          
+          try {
+            const picRes = await axios.get(profilePicUrl, { timeout: 5000 });
+            if (picRes.data && picRes.data.data && picRes.data.data.url) {
+              const logoUrl = picRes.data.data.url;
+              const isValid = await isValidImageUrl(logoUrl);
+              if (isValid) {
+                console.log('✅ Logo Facebook trouvé: ' + logoUrl);
+                return { url: logoUrl, source: 'Facebook', pageUrl: url };
+              }
+            }
+          } catch (fbError) {
+            // L'API Graph peut échouer, on continue
+            console.log('⚠️ API Facebook non disponible');
+          }
+        }
+        
+        // Retourner juste l'URL de la page pour référence
+        return { url: null, source: 'Facebook', pageUrl: url };
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.log('⚠️ Erreur recherche Facebook: ' + error.message);
+    return null;
+  }
+}
+
+/**
+ * Recherche Google Images classique (fallback)
+ */
 async function searchLogoGoogle(clubName, sport, targetCount) {
-  targetCount = targetCount || 6;
+  targetCount = targetCount || 4;
   if (!CONFIG.googleApiKey || !CONFIG.googleCx) {
     return [];
   }
@@ -89,8 +283,8 @@ async function searchLogoGoogle(clubName, sport, targetCount) {
   const seenUrls = new Set();
   
   const queries = [
-    clubName + ' ' + (sport || '') + ' logo',
-    clubName + ' logo png'
+    clubName + ' logo png',
+    clubName + ' ' + (sport || '') + ' logo'
   ];
   
   for (let q = 0; q < queries.length && validLogos.length < targetCount; q++) {
@@ -101,7 +295,7 @@ async function searchLogoGoogle(clubName, sport, targetCount) {
       
       const res = await axios.get(url, { timeout: 10000 });
       
-      if (res.data.items?.length > 0) {
+      if (res.data.items && res.data.items.length > 0) {
         for (let i = 0; i < res.data.items.length && validLogos.length < targetCount; i++) {
           const item = res.data.items[i];
           
@@ -119,29 +313,59 @@ async function searchLogoGoogle(clubName, sport, targetCount) {
         }
       }
     } catch (error) {
-      console.log('⚠️ Google error: ' + error.message);
+      console.log('⚠️ Google Images error: ' + error.message);
     }
   }
   
   return validLogos;
 }
 
+/**
+ * Fonction principale: cherche les logos dans l'ordre optimal
+ * 1. Site officiel du club
+ * 2. Page Facebook
+ * 3. BeSport (si disponible)
+ * 4. Google Images (fallback)
+ */
 async function findAllLogos(clubName, besportLogo, sport) {
   const logos = [];
+  const seenUrls = new Set();
   
-  // Logo BeSport
-  if (besportLogo && besportLogo.startsWith('http')) {
+  console.log('🔍 Recherche logos pour: ' + clubName);
+  
+  // 1. Site officiel du club
+  const officialLogo = await searchLogoFromOfficialSite(clubName, sport);
+  if (officialLogo && officialLogo.url) {
+    logos.push({ source: 'Site officiel', url: officialLogo.url, emoji: '🌐' });
+    seenUrls.add(officialLogo.url);
+  }
+  
+  // 2. Page Facebook
+  const facebookLogo = await searchLogoFromFacebook(clubName, sport);
+  if (facebookLogo && facebookLogo.url && !seenUrls.has(facebookLogo.url)) {
+    logos.push({ source: 'Facebook', url: facebookLogo.url, emoji: '📘' });
+    seenUrls.add(facebookLogo.url);
+  }
+  
+  // 3. Logo BeSport (souvent basse qualité mais correct)
+  if (besportLogo && besportLogo.startsWith('http') && !seenUrls.has(besportLogo)) {
     const isValid = await isValidImageUrl(besportLogo);
     if (isValid) {
       logos.push({ source: 'BeSport', url: besportLogo, emoji: '🅱️' });
+      seenUrls.add(besportLogo);
     }
   }
   
-  // Logos Google (6 max)
-  const googleLogos = await searchLogoGoogle(clubName, sport, 6);
+  // 4. Google Images (fallback, 4 résultats max)
+  const googleLogos = await searchLogoGoogle(clubName, sport, 4);
   googleLogos.forEach(function(logo, index) {
-    logos.push({ source: 'Google ' + (index + 1), url: logo.url, emoji: '🔍' });
+    if (!seenUrls.has(logo.url)) {
+      logos.push({ source: 'Google ' + (index + 1), url: logo.url, emoji: '🔍' });
+      seenUrls.add(logo.url);
+    }
   });
+  
+  console.log('📦 ' + logos.length + ' logos trouvés pour ' + clubName);
   
   return logos;
 }
@@ -643,7 +867,7 @@ function setupBotCommands() {
     }
     const stats = await getStats();
     bot.sendMessage(chatId,
-      '🎯 PPATCH Bot v5.6\n\n' +
+      '🎯 PPATCH Bot v5.7\n\n' +
       '🖼️ Logos: ' + stats.pendingLogo + ' à valider | ' + stats.createdLogo + ' créés\n' +
       '📧 Emails: ' + stats.pendingEmail + ' à valider | ' + stats.sentEmail + ' envoyés\n\n' +
       '📦 Cache: ' + clubCache.length + ' clubs pré-chargés\n' +
@@ -1008,7 +1232,7 @@ export async function startTelegramBot() {
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.6 redémarré !\n\n✨ Anti-crash amélioré');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.7 redémarré !\n\n🌐 Recherche logos: Site officiel + Facebook + Google');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
