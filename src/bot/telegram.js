@@ -1,16 +1,11 @@
 /**
- * PPATCH - Bot Telegram Unifié v5.9
+ * PPATCH - Bot Telegram Unifié v5.11
  * - /logo : Valider logos + créer pages
  * - /mail : Valider emails
  * - /sync : Synchroniser avec Shopify
  * - /stats : Statistiques
  * 
- * FIX v5.4: Correction du bug de réapparition des clubs validés
- * FIX v5.5: Suppression Wikipedia (toujours 403)
- * FIX v5.6: Anti-crash (try-catch + gestion erreurs polling + pas de Markdown)
- * NEW v5.7: Recherche logos améliorée (site officiel + Facebook + Google)
- * FIX v5.8: Safe answerCallbackQuery (callbacks expirés ne crashent plus)
- * FIX v5.9: Timeouts stricts sur recherche logos (évite freeze)
+ * v5.11: Logs détaillés + timeouts réduits pour trouver le freeze
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -66,12 +61,12 @@ async function initGoogleSheets() {
 
 async function isValidImageUrl(url) {
   try {
-    const response = await axios.head(url, { timeout: 5000 });
+    const response = await axios.head(url, { timeout: 3000 });
     const contentType = response.headers['content-type'] || '';
     return contentType.startsWith('image/');
   } catch (error) {
     try {
-      const response = await axios.get(url, { timeout: 5000, responseType: 'arraybuffer', maxContentLength: 100000 });
+      const response = await axios.get(url, { timeout: 3000, responseType: 'arraybuffer', maxContentLength: 100000 });
       const contentType = response.headers['content-type'] || '';
       return contentType.startsWith('image/');
     } catch (e) {
@@ -137,6 +132,7 @@ async function searchLogoFromOfficialSite(clubName, sport) {
  * Extrait le logo depuis un site web (header, favicon, og:image)
  */
 async function extractLogoFromWebsite(siteUrl) {
+  console.log('  📥 Téléchargement: ' + siteUrl);
   try {
     const response = await axios.get(siteUrl, { 
       timeout: 5000,
@@ -146,65 +142,68 @@ async function extractLogoFromWebsite(siteUrl) {
       maxContentLength: 500000 // Max 500KB pour éviter les gros sites
     });
     
+    console.log('  ✅ Page téléchargée (' + (response.data?.length || 0) + ' chars)');
+    
     const html = response.data;
+    if (!html || typeof html !== 'string') {
+      console.log('  ⚠️ HTML invalide');
+      return null;
+    }
     
-    // Chercher les images logo dans le HTML
-    const logoPatterns = [
-      // WordPress: wp-content/uploads avec logo dans le nom
-      /https?:\/\/[^"'\s]+wp-content\/uploads\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|svg|webp)/gi,
-      // Images avec "logo" dans l'URL
-      /https?:\/\/[^"'\s]+\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|svg|webp)/gi,
-      // og:image (souvent le logo)
-      /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
-    ];
-    
+    // Chercher les images logo dans le HTML (patterns simplifiés)
     const foundUrls = [];
     
-    for (let i = 0; i < logoPatterns.length && foundUrls.length < 3; i++) {
-      const pattern = logoPatterns[i];
-      let match;
-      
-      // Reset lastIndex for global patterns
-      pattern.lastIndex = 0;
-      
-      while ((match = pattern.exec(html)) !== null && foundUrls.length < 3) {
-        let logoUrl = match[1] || match[0];
-        
-        // Convertir en URL absolue si nécessaire
-        if (logoUrl.startsWith('//')) {
-          logoUrl = 'https:' + logoUrl;
-        } else if (logoUrl.startsWith('/')) {
-          try {
-            const baseUrl = new URL(siteUrl);
-            logoUrl = baseUrl.origin + logoUrl;
-          } catch (e) { continue; }
-        } else if (!logoUrl.startsWith('http')) {
-          continue;
-        }
-        
-        // Exclure les petites icônes et favicons
-        if (logoUrl.includes('favicon') || logoUrl.includes('16x16') || logoUrl.includes('32x32')) {
-          continue;
-        }
-        
-        if (!foundUrls.includes(logoUrl)) {
-          foundUrls.push(logoUrl);
+    // Pattern 1: WordPress uploads avec logo
+    console.log('  🔎 Recherche pattern WordPress...');
+    const wpMatches = html.match(/https?:\/\/[^"'\s]+wp-content\/uploads\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi);
+    if (wpMatches) {
+      for (let i = 0; i < Math.min(wpMatches.length, 2); i++) {
+        foundUrls.push(wpMatches[i]);
+      }
+    }
+    
+    // Pattern 2: Footeo/static logos
+    if (foundUrls.length === 0) {
+      console.log('  🔎 Recherche pattern static...');
+      const staticMatches = html.match(/https?:\/\/[^"'\s]+static[^"'\s]*\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi);
+      if (staticMatches) {
+        for (let i = 0; i < Math.min(staticMatches.length, 2); i++) {
+          foundUrls.push(staticMatches[i]);
         }
       }
     }
     
+    // Pattern 3: Autres URLs avec logo
+    if (foundUrls.length === 0) {
+      console.log('  🔎 Recherche pattern générique...');
+      const logoMatches = html.match(/https?:\/\/[^"'\s]{10,100}logo[^"'\s]{0,50}\.(?:png|jpg|jpeg|webp)/gi);
+      if (logoMatches) {
+        for (let i = 0; i < Math.min(logoMatches.length, 2); i++) {
+          if (!logoMatches[i].includes('favicon')) {
+            foundUrls.push(logoMatches[i]);
+          }
+        }
+      }
+    }
+    
+    console.log('  📋 ' + foundUrls.length + ' URLs candidates');
+    
     // Valider et retourner la première URL valide (max 2 tentatives)
     for (let i = 0; i < Math.min(foundUrls.length, 2); i++) {
       const logoUrl = foundUrls[i];
+      console.log('  🔗 Validation: ' + logoUrl.substring(0, 60) + '...');
       try {
         const isValid = await isValidImageUrl(logoUrl);
         if (isValid) {
           console.log('✅ Logo trouvé: ' + logoUrl);
           return logoUrl;
         }
-      } catch (e) {}
+      } catch (e) {
+        console.log('  ❌ Validation échouée: ' + e.message);
+      }
     }
     
+    console.log('  ⚠️ Aucun logo valide trouvé');
     return null;
   } catch (error) {
     console.log('⚠️ Erreur extraction logo: ' + error.message);
@@ -328,11 +327,9 @@ async function searchLogoGoogle(clubName, sport, targetCount) {
 }
 
 /**
- * Fonction principale: cherche les logos dans l'ordre optimal
- * 1. Site officiel du club (avec timeout)
- * 2. Page Facebook (avec timeout)
- * 3. BeSport (si disponible)
- * 4. Google Images (fallback)
+ * Fonction principale: cherche les logos
+ * v5.10: Recherche avancée désactivée temporairement (freeze)
+ * Juste BeSport + Google Images pour l'instant
  */
 async function findAllLogos(clubName, besportLogo, sport) {
   const logos = [];
@@ -340,50 +337,7 @@ async function findAllLogos(clubName, besportLogo, sport) {
   
   console.log('🔍 Recherche logos pour: ' + clubName);
   
-  // Timeout global de 15 secondes pour la recherche avancée
-  const advancedSearchPromise = (async () => {
-    try {
-      // 1. Site officiel du club (max 8s)
-      const officialPromise = Promise.race([
-        searchLogoFromOfficialSite(clubName, sport),
-        new Promise(resolve => setTimeout(() => resolve(null), 8000))
-      ]);
-      const officialLogo = await officialPromise;
-      
-      if (officialLogo && officialLogo.url) {
-        console.log('✅ Logo site officiel trouvé');
-        logos.push({ source: 'Site officiel', url: officialLogo.url, emoji: '🌐' });
-        seenUrls.add(officialLogo.url);
-      }
-    } catch (e) {
-      console.log('⚠️ Erreur recherche site: ' + e.message);
-    }
-    
-    try {
-      // 2. Page Facebook (max 5s)
-      const facebookPromise = Promise.race([
-        searchLogoFromFacebook(clubName, sport),
-        new Promise(resolve => setTimeout(() => resolve(null), 5000))
-      ]);
-      const facebookLogo = await facebookPromise;
-      
-      if (facebookLogo && facebookLogo.url && !seenUrls.has(facebookLogo.url)) {
-        console.log('✅ Logo Facebook trouvé');
-        logos.push({ source: 'Facebook', url: facebookLogo.url, emoji: '📘' });
-        seenUrls.add(facebookLogo.url);
-      }
-    } catch (e) {
-      console.log('⚠️ Erreur recherche Facebook: ' + e.message);
-    }
-  })();
-  
-  // Attendre max 15s pour la recherche avancée
-  await Promise.race([
-    advancedSearchPromise,
-    new Promise(resolve => setTimeout(resolve, 15000))
-  ]);
-  
-  // 3. Logo BeSport (souvent basse qualité mais correct)
+  // 1. Logo BeSport
   if (besportLogo && besportLogo.startsWith('http') && !seenUrls.has(besportLogo)) {
     try {
       const isValid = await isValidImageUrl(besportLogo);
@@ -394,9 +348,9 @@ async function findAllLogos(clubName, besportLogo, sport) {
     } catch (e) {}
   }
   
-  // 4. Google Images (fallback, 4 résultats max)
+  // 2. Google Images (6 résultats)
   try {
-    const googleLogos = await searchLogoGoogle(clubName, sport, 4);
+    const googleLogos = await searchLogoGoogle(clubName, sport, 6);
     googleLogos.forEach(function(logo, index) {
       if (!seenUrls.has(logo.url)) {
         logos.push({ source: 'Google ' + (index + 1), url: logo.url, emoji: '🔍' });
@@ -909,7 +863,7 @@ function setupBotCommands() {
     }
     const stats = await getStats();
     bot.sendMessage(chatId,
-      '🎯 PPATCH Bot v5.9\n\n' +
+      '🎯 PPATCH Bot v5.11\n\n' +
       '🖼️ Logos: ' + stats.pendingLogo + ' à valider | ' + stats.createdLogo + ' créés\n' +
       '📧 Emails: ' + stats.pendingEmail + ' à valider | ' + stats.sentEmail + ' envoyés\n\n' +
       '📦 Cache: ' + clubCache.length + ' clubs pré-chargés\n' +
@@ -1286,7 +1240,7 @@ export async function startTelegramBot() {
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.9 redémarré !\n\n⏱️ Timeouts stricts (plus de freeze)');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.11 redémarré !\n\n🔍 Logs détaillés pour debug');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
