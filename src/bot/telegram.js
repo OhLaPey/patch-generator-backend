@@ -1,12 +1,12 @@
 /**
- * PPATCH - Bot Telegram Unifié v5.13
+ * PPATCH - Bot Telegram Unifié v5.14
  * - /logo : Valider logos + créer pages
  * - /mail : Valider emails
  * - /sync : Synchroniser avec Shopify
  * - /stats : Statistiques
  * 
- * v5.13: Recherche avancée réactivée (site officiel + Facebook + BeSport + Google)
- *        avec AbortController pour timeouts garantis
+ * v5.14: Mode "clubs faciles" - uniquement logos fiables (site officiel + Facebook)
+ *        Les clubs sans logo fiable sont marqués "skip_no_logo" dans le Sheet
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -336,7 +336,8 @@ async function searchLogoGoogle(clubName, sport, targetCount) {
 
 /**
  * Fonction principale: cherche les logos dans l'ordre optimal
- * v5.13: Recherche avancée réactivée avec AbortController
+ * v5.14: Mode "clubs faciles" - uniquement site officiel + Facebook
+ *        Skip automatique si aucun logo fiable trouvé
  */
 async function findAllLogos(clubName, besportLogo, sport) {
   const logos = [];
@@ -376,31 +377,13 @@ async function findAllLogos(clubName, besportLogo, sport) {
     console.log('⚠️ Erreur Facebook: ' + e.message);
   }
   
-  // 3. Logo BeSport
-  if (besportLogo && besportLogo.startsWith('http') && !seenUrls.has(besportLogo)) {
-    try {
-      const isValid = await isValidImageUrl(besportLogo);
-      if (isValid) {
-        logos.push({ source: 'BeSport', url: besportLogo, emoji: '🅱️' });
-        seenUrls.add(besportLogo);
-      }
-    } catch (e) {}
+  // Si aucun logo fiable trouvé, retourner tableau vide (sera skippé)
+  if (logos.length === 0) {
+    console.log('⏭️ Aucun logo fiable trouvé - club difficile');
+    return [];
   }
   
-  // 4. Google Images (4 résultats)
-  try {
-    const googleLogos = await searchLogoGoogle(clubName, sport, 4);
-    googleLogos.forEach(function(logo, index) {
-      if (!seenUrls.has(logo.url)) {
-        logos.push({ source: 'Google ' + (index + 1), url: logo.url, emoji: '🔍' });
-        seenUrls.add(logo.url);
-      }
-    });
-  } catch (e) {
-    console.log('⚠️ Erreur Google Images: ' + e.message);
-  }
-  
-  console.log('📦 ' + logos.length + ' logos trouvés pour ' + clubName);
+  console.log('📦 ' + logos.length + ' logos fiables trouvés pour ' + clubName);
   
   return logos;
 }
@@ -498,8 +481,12 @@ async function preloadClubLogos() {
   isCacheLoading = true;
   
   try {
-    while (clubCache.length < CACHE_SIZE) {
-      const clubs = await getNextClubsForLogo(CACHE_SIZE - clubCache.length + 2);
+    let attempts = 0;
+    const maxAttempts = 20; // Éviter boucle infinie
+    
+    while (clubCache.length < CACHE_SIZE && attempts < maxAttempts) {
+      attempts++;
+      const clubs = await getNextClubsForLogo(CACHE_SIZE - clubCache.length + 5);
       
       if (clubs.length === 0) break;
       
@@ -511,6 +498,21 @@ async function preloadClubLogos() {
         console.log('📦 Pré-chargement: ' + clubInfo.data.club);
         const logos = await findAllLogos(clubInfo.data.club, clubInfo.data.logo, clubInfo.data.sport);
         
+        // Si aucun logo fiable, marquer comme "difficile" et passer au suivant
+        if (logos.length === 0) {
+          console.log('⏭️ Skip: ' + clubInfo.data.club + ' (pas de logo fiable)');
+          try {
+            const freshRow = await getFreshRow(clubInfo.rowIndex);
+            if (freshRow) {
+              freshRow.set('Statut_Shopify', 'skip_no_logo');
+              await freshRow.save();
+            }
+          } catch (e) {
+            console.log('⚠️ Erreur marquage skip: ' + e.message);
+          }
+          continue;
+        }
+        
         clubCache.push({
           rowIndex: clubInfo.rowIndex,
           data: clubInfo.data,
@@ -520,7 +522,7 @@ async function preloadClubLogos() {
         if (clubCache.length >= CACHE_SIZE) break;
       }
       
-      break;
+      if (clubCache.length >= CACHE_SIZE) break;
     }
     
     console.log('📦 Cache: ' + clubCache.length + '/' + CACHE_SIZE + ' clubs pré-chargés');
@@ -902,7 +904,7 @@ function setupBotCommands() {
     }
     const stats = await getStats();
     bot.sendMessage(chatId,
-      '🎯 PPATCH Bot v5.13\n\n' +
+      '🎯 PPATCH Bot v5.14\n\n' +
       '🖼️ Logos: ' + stats.pendingLogo + ' à valider | ' + stats.createdLogo + ' créés\n' +
       '📧 Emails: ' + stats.pendingEmail + ' à valider | ' + stats.sentEmail + ' envoyés\n\n' +
       '📦 Cache: ' + clubCache.length + ' clubs pré-chargés\n' +
@@ -1279,7 +1281,7 @@ export async function startTelegramBot() {
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.13 redémarré !\n\n🌐 Recherche avancée activée (site + FB + BeSport + Google)');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.14 redémarré !\n\n🎯 Mode clubs faciles (site officiel + Facebook uniquement)');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
