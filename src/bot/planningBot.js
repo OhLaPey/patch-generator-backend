@@ -136,7 +136,7 @@ export async function startPlanningBot() {
 
             // Initialiser Gemini
             const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-            const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
+            const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
             // ÉTAPE 1 : Récupérer les métadonnées
             await planningBot.editMessageText('🤖 Lecture des métadonnées...', { chat_id: chatId, message_id: statusMsg.message_id });
