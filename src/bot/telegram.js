@@ -1,5 +1,5 @@
 /**
- * PPATCH - Bot Telegram Unifié v5.7
+ * PPATCH - Bot Telegram Unifié v5.8
  * - /logo : Valider logos + créer pages
  * - /mail : Valider emails
  * - /sync : Synchroniser avec Shopify
@@ -9,6 +9,7 @@
  * FIX v5.5: Suppression Wikipedia (toujours 403)
  * FIX v5.6: Anti-crash (try-catch + gestion erreurs polling + pas de Markdown)
  * NEW v5.7: Recherche logos améliorée (site officiel + Facebook + Google)
+ * FIX v5.8: Safe answerCallbackQuery (callbacks expirés ne crashent plus)
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -867,7 +868,7 @@ function setupBotCommands() {
     }
     const stats = await getStats();
     bot.sendMessage(chatId,
-      '🎯 PPATCH Bot v5.7\n\n' +
+      '🎯 PPATCH Bot v5.8\n\n' +
       '🖼️ Logos: ' + stats.pendingLogo + ' à valider | ' + stats.createdLogo + ' créés\n' +
       '📧 Emails: ' + stats.pendingEmail + ' à valider | ' + stats.sentEmail + ' envoyés\n\n' +
       '📦 Cache: ' + clubCache.length + ' clubs pré-chargés\n' +
@@ -1055,21 +1056,31 @@ async function handleCallbackQuery(query) {
   if (!isAuthorized(chatId)) return;
   const state = userState.get(chatId);
 
+  // Fonction helper pour répondre aux callbacks sans crasher
+  async function safeAnswer(text) {
+    try {
+      await bot.answerCallbackQuery(query.id, { text: text });
+    } catch (e) {
+      // Callback expiré, on ignore
+      console.log('⚠️ Callback expiré: ' + e.message);
+    }
+  }
+
   try {
     if (action.startsWith('email_')) {
       if (!state || state.mode !== 'email') {
-        return bot.answerCallbackQuery(query.id, { text: '❌ Tapez /mail d\'abord' });
+        return safeAnswer('❌ Tapez /mail d\'abord');
       }
       const row = state.row;
       const data = state.data;
 
       if (action === 'email_skip') {
-        await bot.answerCallbackQuery(query.id, { text: '⏭️ Passé' });
+        await safeAnswer('⏭️ Passé');
         userState.delete(chatId);
         return sendNextEmail(chatId);
       }
       if (action === 'email_valid') {
-        await bot.answerCallbackQuery(query.id, { text: '⏳ Ajout Brevo...' });
+        await safeAnswer('⏳ Ajout Brevo...');
         const brevoResult = await addToBrevo(data.email, data.club, data.sport, data.ville);
         if (brevoResult.success) {
           row.set('Status', 'sent');
@@ -1082,7 +1093,7 @@ async function handleCallbackQuery(query) {
         setTimeout(function() { sendNextEmail(chatId); }, 500);
       }
       if (action === 'email_invalid') {
-        await bot.answerCallbackQuery(query.id, { text: '❌ Marqué invalide' });
+        await safeAnswer('❌ Marqué invalide');
         row.set('Status', 'invalid');
         await row.save();
         await bot.sendMessage(chatId, '❌ ' + data.club + ' marqué invalide');
@@ -1090,7 +1101,7 @@ async function handleCallbackQuery(query) {
         setTimeout(function() { sendNextEmail(chatId); }, 500);
       }
       if (action === 'email_delete') {
-        await bot.answerCallbackQuery(query.id, { text: '⏳ Suppression...' });
+        await safeAnswer('⏳ Suppression...');
         const handle = await getProductHandleFromUrl(data.shopifyUrl);
         if (handle) {
           const productId = await getProductIdByHandle(handle);
@@ -1109,7 +1120,7 @@ async function handleCallbackQuery(query) {
 
     if (action.startsWith('logo_')) {
       if (!state || state.mode !== 'logo') {
-        return bot.answerCallbackQuery(query.id, { text: '❌ Tapez /logo d\'abord' });
+        return safeAnswer('❌ Tapez /logo d\'abord');
       }
       const row = state.row;
       const rowIndex = state.rowIndex;
@@ -1117,14 +1128,14 @@ async function handleCallbackQuery(query) {
       const logos = state.logos;
 
       if (action === 'logo_skip') {
-        await bot.answerCallbackQuery(query.id, { text: '⏭️ Passé' });
+        await safeAnswer('⏭️ Passé');
         await updateLogoStatus(row, 'skipped');
         cleanCache(rowIndex);
         userState.delete(chatId);
         return sendNextLogo(chatId);
       }
       if (action === 'logo_reject') {
-        await bot.answerCallbackQuery(query.id, { text: '❌ Logo rejeté' });
+        await safeAnswer('❌ Logo rejeté');
         await updateLogoStatus(row, 'rejected');
         cleanCache(rowIndex);
         await bot.sendMessage(chatId, '❌ ' + data.club + ' logo rejeté');
@@ -1135,9 +1146,9 @@ async function handleCallbackQuery(query) {
         const logoIndex = parseInt(action.replace('logo_select_', ''));
         const selectedLogo = logos[logoIndex];
         if (!selectedLogo) {
-          return bot.answerCallbackQuery(query.id, { text: '❌ Logo non trouvé' });
+          return safeAnswer('❌ Logo non trouvé');
         }
-        await bot.answerCallbackQuery(query.id, { text: '⏳ Création en cours...' });
+        await safeAnswer('⏳ Création en cours...');
         
         // Marquer comme processing AVANT de continuer
         await updateLogoStatus(row, 'processing');
@@ -1175,7 +1186,9 @@ async function handleCallbackQuery(query) {
     }
   } catch (error) {
     console.log('❌ Erreur handleCallbackQuery: ' + error.message);
-    bot.sendMessage(chatId, '❌ Erreur: ' + error.message);
+    try {
+      bot.sendMessage(chatId, '❌ Erreur: ' + error.message);
+    } catch (e) {}
   }
 }
 
@@ -1232,7 +1245,7 @@ export async function startTelegramBot() {
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.7 redémarré !\n\n🌐 Recherche logos: Site officiel + Facebook + Google');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.8 redémarré !\n\n🔧 Fix: callbacks expirés');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
