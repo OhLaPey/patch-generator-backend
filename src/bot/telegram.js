@@ -1,5 +1,5 @@
 /**
- * PPATCH - Bot Telegram Unifié v5.8
+ * PPATCH - Bot Telegram Unifié v5.9
  * - /logo : Valider logos + créer pages
  * - /mail : Valider emails
  * - /sync : Synchroniser avec Shopify
@@ -10,6 +10,7 @@
  * FIX v5.6: Anti-crash (try-catch + gestion erreurs polling + pas de Markdown)
  * NEW v5.7: Recherche logos améliorée (site officiel + Facebook + Google)
  * FIX v5.8: Safe answerCallbackQuery (callbacks expirés ne crashent plus)
+ * FIX v5.9: Timeouts stricts sur recherche logos (évite freeze)
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -138,10 +139,11 @@ async function searchLogoFromOfficialSite(clubName, sport) {
 async function extractLogoFromWebsite(siteUrl) {
   try {
     const response = await axios.get(siteUrl, { 
-      timeout: 10000,
+      timeout: 5000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
+      },
+      maxContentLength: 500000 // Max 500KB pour éviter les gros sites
     });
     
     const html = response.data;
@@ -154,29 +156,28 @@ async function extractLogoFromWebsite(siteUrl) {
       /https?:\/\/[^"'\s]+\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|svg|webp)/gi,
       // og:image (souvent le logo)
       /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
-      // Images dans le header avec class/id contenant logo
-      /<img[^>]+(?:class|id)=["'][^"']*logo[^"']*["'][^>]+src=["']([^"']+)["']/gi,
-      /<img[^>]+src=["']([^"']+)["'][^>]+(?:class|id)=["'][^"']*logo[^"']*["']/gi,
     ];
     
-    const foundUrls = new Set();
+    const foundUrls = [];
     
-    for (let i = 0; i < logoPatterns.length; i++) {
+    for (let i = 0; i < logoPatterns.length && foundUrls.length < 3; i++) {
       const pattern = logoPatterns[i];
       let match;
       
       // Reset lastIndex for global patterns
       pattern.lastIndex = 0;
       
-      while ((match = pattern.exec(html)) !== null) {
+      while ((match = pattern.exec(html)) !== null && foundUrls.length < 3) {
         let logoUrl = match[1] || match[0];
         
         // Convertir en URL absolue si nécessaire
         if (logoUrl.startsWith('//')) {
           logoUrl = 'https:' + logoUrl;
         } else if (logoUrl.startsWith('/')) {
-          const baseUrl = new URL(siteUrl);
-          logoUrl = baseUrl.origin + logoUrl;
+          try {
+            const baseUrl = new URL(siteUrl);
+            logoUrl = baseUrl.origin + logoUrl;
+          } catch (e) { continue; }
         } else if (!logoUrl.startsWith('http')) {
           continue;
         }
@@ -186,17 +187,22 @@ async function extractLogoFromWebsite(siteUrl) {
           continue;
         }
         
-        foundUrls.add(logoUrl);
+        if (!foundUrls.includes(logoUrl)) {
+          foundUrls.push(logoUrl);
+        }
       }
     }
     
-    // Valider et retourner la première URL valide
-    for (const logoUrl of foundUrls) {
-      const isValid = await isValidImageUrl(logoUrl);
-      if (isValid) {
-        console.log('✅ Logo trouvé: ' + logoUrl);
-        return logoUrl;
-      }
+    // Valider et retourner la première URL valide (max 2 tentatives)
+    for (let i = 0; i < Math.min(foundUrls.length, 2); i++) {
+      const logoUrl = foundUrls[i];
+      try {
+        const isValid = await isValidImageUrl(logoUrl);
+        if (isValid) {
+          console.log('✅ Logo trouvé: ' + logoUrl);
+          return logoUrl;
+        }
+      } catch (e) {}
     }
     
     return null;
@@ -323,8 +329,8 @@ async function searchLogoGoogle(clubName, sport, targetCount) {
 
 /**
  * Fonction principale: cherche les logos dans l'ordre optimal
- * 1. Site officiel du club
- * 2. Page Facebook
+ * 1. Site officiel du club (avec timeout)
+ * 2. Page Facebook (avec timeout)
  * 3. BeSport (si disponible)
  * 4. Google Images (fallback)
  */
@@ -334,37 +340,72 @@ async function findAllLogos(clubName, besportLogo, sport) {
   
   console.log('🔍 Recherche logos pour: ' + clubName);
   
-  // 1. Site officiel du club
-  const officialLogo = await searchLogoFromOfficialSite(clubName, sport);
-  if (officialLogo && officialLogo.url) {
-    logos.push({ source: 'Site officiel', url: officialLogo.url, emoji: '🌐' });
-    seenUrls.add(officialLogo.url);
-  }
+  // Timeout global de 15 secondes pour la recherche avancée
+  const advancedSearchPromise = (async () => {
+    try {
+      // 1. Site officiel du club (max 8s)
+      const officialPromise = Promise.race([
+        searchLogoFromOfficialSite(clubName, sport),
+        new Promise(resolve => setTimeout(() => resolve(null), 8000))
+      ]);
+      const officialLogo = await officialPromise;
+      
+      if (officialLogo && officialLogo.url) {
+        console.log('✅ Logo site officiel trouvé');
+        logos.push({ source: 'Site officiel', url: officialLogo.url, emoji: '🌐' });
+        seenUrls.add(officialLogo.url);
+      }
+    } catch (e) {
+      console.log('⚠️ Erreur recherche site: ' + e.message);
+    }
+    
+    try {
+      // 2. Page Facebook (max 5s)
+      const facebookPromise = Promise.race([
+        searchLogoFromFacebook(clubName, sport),
+        new Promise(resolve => setTimeout(() => resolve(null), 5000))
+      ]);
+      const facebookLogo = await facebookPromise;
+      
+      if (facebookLogo && facebookLogo.url && !seenUrls.has(facebookLogo.url)) {
+        console.log('✅ Logo Facebook trouvé');
+        logos.push({ source: 'Facebook', url: facebookLogo.url, emoji: '📘' });
+        seenUrls.add(facebookLogo.url);
+      }
+    } catch (e) {
+      console.log('⚠️ Erreur recherche Facebook: ' + e.message);
+    }
+  })();
   
-  // 2. Page Facebook
-  const facebookLogo = await searchLogoFromFacebook(clubName, sport);
-  if (facebookLogo && facebookLogo.url && !seenUrls.has(facebookLogo.url)) {
-    logos.push({ source: 'Facebook', url: facebookLogo.url, emoji: '📘' });
-    seenUrls.add(facebookLogo.url);
-  }
+  // Attendre max 15s pour la recherche avancée
+  await Promise.race([
+    advancedSearchPromise,
+    new Promise(resolve => setTimeout(resolve, 15000))
+  ]);
   
   // 3. Logo BeSport (souvent basse qualité mais correct)
   if (besportLogo && besportLogo.startsWith('http') && !seenUrls.has(besportLogo)) {
-    const isValid = await isValidImageUrl(besportLogo);
-    if (isValid) {
-      logos.push({ source: 'BeSport', url: besportLogo, emoji: '🅱️' });
-      seenUrls.add(besportLogo);
-    }
+    try {
+      const isValid = await isValidImageUrl(besportLogo);
+      if (isValid) {
+        logos.push({ source: 'BeSport', url: besportLogo, emoji: '🅱️' });
+        seenUrls.add(besportLogo);
+      }
+    } catch (e) {}
   }
   
   // 4. Google Images (fallback, 4 résultats max)
-  const googleLogos = await searchLogoGoogle(clubName, sport, 4);
-  googleLogos.forEach(function(logo, index) {
-    if (!seenUrls.has(logo.url)) {
-      logos.push({ source: 'Google ' + (index + 1), url: logo.url, emoji: '🔍' });
-      seenUrls.add(logo.url);
-    }
-  });
+  try {
+    const googleLogos = await searchLogoGoogle(clubName, sport, 4);
+    googleLogos.forEach(function(logo, index) {
+      if (!seenUrls.has(logo.url)) {
+        logos.push({ source: 'Google ' + (index + 1), url: logo.url, emoji: '🔍' });
+        seenUrls.add(logo.url);
+      }
+    });
+  } catch (e) {
+    console.log('⚠️ Erreur Google Images: ' + e.message);
+  }
   
   console.log('📦 ' + logos.length + ' logos trouvés pour ' + clubName);
   
@@ -868,7 +909,7 @@ function setupBotCommands() {
     }
     const stats = await getStats();
     bot.sendMessage(chatId,
-      '🎯 PPATCH Bot v5.8\n\n' +
+      '🎯 PPATCH Bot v5.9\n\n' +
       '🖼️ Logos: ' + stats.pendingLogo + ' à valider | ' + stats.createdLogo + ' créés\n' +
       '📧 Emails: ' + stats.pendingEmail + ' à valider | ' + stats.sentEmail + ' envoyés\n\n' +
       '📦 Cache: ' + clubCache.length + ' clubs pré-chargés\n' +
@@ -1245,7 +1286,7 @@ export async function startTelegramBot() {
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.8 redémarré !\n\n🔧 Fix: callbacks expirés');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.9 redémarré !\n\n⏱️ Timeouts stricts (plus de freeze)');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
