@@ -1,6 +1,5 @@
 import TelegramBot from 'node-telegram-bot-api';
 import axios from 'axios';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -9,36 +8,35 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
+// Installer pandas et openpyxl au démarrage
+async function ensurePythonDeps() {
+    try {
+        await execAsync('python3 -c "import pandas, openpyxl"');
+        console.log('✅ Python deps OK');
+    } catch (e) {
+        console.log('📦 Installation pandas + openpyxl...');
+        try {
+            await execAsync('pip install pandas openpyxl --break-system-packages -q');
+            console.log('✅ Python deps installés');
+        } catch (err) {
+            console.log('⚠️ Erreur installation Python deps:', err.message);
+        }
+    }
+}
+
 // Configuration
 const PLANNING_BOT_TOKEN = process.env.PLANNING_BOT_TOKEN;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_REPO = 'OhLaPey/planning-urbansoccer';
 
-// Liste complète des employés (dans l'ordre du tableau de HAUT en BAS)
+// Liste complète des employés (dans l'ordre du tableau)
 const ALL_EMPLOYEES = [
-    'BONILLO Matthieu',      // Ligne 1
-    'BOULARDET Lucas',       // Ligne 2
-    'CARRERE Peïo',          // Ligne 3
-    'CASTELLON Pascaline',   // Ligne 4
-    'COHAT Linda',           // Ligne 5
-    'CRUZEL Quentin',        // Ligne 6
-    'DE NOUEL Maxime',       // Ligne 7
-    'DIVIEN Yohan',          // Ligne 8
-    'DONAER Nicolas',        // Ligne 9
-    'DOVINA Théo',           // Ligne 10
-    'HEBERT Jean Baptiste',  // Ligne 11
-    'JARGUEL Thomas',        // Ligne 12
-    'KABUNDA NDEKE Marvyn',  // Ligne 13
-    'MADIELE Henri',         // Ligne 14
-    'MOSTEFA Yanis',         // Ligne 15
-    'PEREZ Loic',            // Ligne 16
-    'PISTORE Remi',          // Ligne 17
-    'PUJOL Mathieu',         // Ligne 18
-    'RABII Mehdi',           // Ligne 19
-    'SEIGNE Kevin',          // Ligne 20
-    'TINGUY Florian',        // Ligne 21
-    'TOPPAN Mattis'          // Ligne 22
+    'BONILLO Matthieu', 'BOULARDET Lucas', 'CARRERE Peïo', 'CASTELLON Pascaline',
+    'COHAT Linda', 'CRUZEL Quentin', 'DE NOUEL Maxime', 'DIVIEN Yohan',
+    'DONAER Nicolas', 'DOVINA Théo', 'HEBERT Jean Baptiste', 'JARGUEL Thomas',
+    'KABUNDA NDEKE Marvyn', 'MADIELE Henri', 'MOSTEFA Yanis', 'PEREZ Loic',
+    'PISTORE Remi', 'PUJOL Mathieu', 'RABII Mehdi', 'SEIGNE Kevin',
+    'TINGUY Florian', 'TOPPAN Mattis'
 ];
 
 // Légende des codes d'activité
@@ -59,19 +57,13 @@ const LEGENDE = {
     "EV-RE": "Régisseur Event",
     "EV-LO": "Logistique Event",
     "FORE": "Formation",
-    "FORP": "Formation"
+    "FORP": "Formation",
+    "INVEN": "Inventaire",
+    "COMMS": "Communication"
 };
 
-// Mapping jours
-const JOURS_MAP = {
-    'Lu': 0, 'Lun': 0, 'Lundi': 0,
-    'Ma': 1, 'Mar': 1, 'Mardi': 1,
-    'Me': 2, 'Mer': 2, 'Mercredi': 2,
-    'Je': 3, 'Jeu': 3, 'Jeudi': 3,
-    'Ve': 4, 'Ven': 4, 'Vendredi': 4,
-    'Sa': 5, 'Sam': 5, 'Samedi': 5,
-    'Di': 6, 'Dim': 6, 'Dimanche': 6
-};
+const MOIS_NOMS = ['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 
+                  'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 
 let planningBot = null;
 
@@ -81,10 +73,8 @@ export async function startPlanningBot() {
         return null;
     }
 
-    if (!GEMINI_API_KEY) {
-        console.log('⚠️  Planning Bot: SKIPPED (GEMINI_API_KEY non défini)');
-        return null;
-    }
+    // S'assurer que pandas est installé
+    await ensurePythonDeps();
 
     planningBot = new TelegramBot(PLANNING_BOT_TOKEN, { polling: true });
     console.log('✅ Planning Bot Urban 7D démarré');
@@ -93,8 +83,8 @@ export async function startPlanningBot() {
         const chatId = msg.chat.id;
         planningBot.sendMessage(chatId, 
             '👋 Bienvenue sur le Bot Planning Urban 7D!\n\n' +
-            '📄 Envoyez-moi le PDF du planning et je génèrerai les fichiers calendrier pour toute l\'équipe.\n\n' +
-            '⏱️ L\'analyse prend environ 2-3 minutes (22 employés à analyser).\n\n' +
+            '📄 Envoyez-moi le fichier Excel (.xlsx) du planning et je génèrerai les fichiers calendrier pour toute l\'équipe.\n\n' +
+            '⚡ Traitement instantané, 100% fiable!\n\n' +
             '🔗 Les liens seront disponibles sur:\nhttps://planning-urbansoccer.onrender.com'
         );
     });
@@ -102,162 +92,88 @@ export async function startPlanningBot() {
     planningBot.on('document', async (msg) => {
         const chatId = msg.chat.id;
         const document = msg.document;
+        const fileName = document.file_name.toLowerCase();
 
-        if (!document.file_name.toLowerCase().endsWith('.pdf')) {
-            planningBot.sendMessage(chatId, '❌ Veuillez envoyer un fichier PDF.');
+        // Vérifier le type de fichier
+        if (!fileName.endsWith('.xlsx') && !fileName.endsWith('.xls')) {
+            planningBot.sendMessage(chatId, '❌ Veuillez envoyer un fichier Excel (.xlsx)');
             return;
         }
 
-        const statusMsg = await planningBot.sendMessage(chatId, '📥 PDF reçu, analyse en cours...\n⏱️ Temps estimé: 2-3 minutes');
+        const statusMsg = await planningBot.sendMessage(chatId, '📥 Fichier Excel reçu, traitement en cours...');
 
         try {
-            // Télécharger le PDF
+            // Télécharger le fichier
             const fileLink = await planningBot.getFileLink(document.file_id);
-            const pdfResponse = await axios.get(fileLink, { responseType: 'arraybuffer' });
+            const fileResponse = await axios.get(fileLink, { responseType: 'arraybuffer' });
             
             const tempDir = os.tmpdir();
             const timestamp = Date.now();
-            const pdfPath = path.join(tempDir, `planning_${timestamp}.pdf`);
-            fs.writeFileSync(pdfPath, pdfResponse.data);
+            const xlsxPath = path.join(tempDir, `planning_${timestamp}.xlsx`);
+            fs.writeFileSync(xlsxPath, fileResponse.data);
 
-            await planningBot.editMessageText('🖼️ Conversion en image HD...', { chat_id: chatId, message_id: statusMsg.message_id });
+            await planningBot.editMessageText('📊 Parsing du fichier Excel...', { chat_id: chatId, message_id: statusMsg.message_id });
 
-            // Convertir PDF en image HAUTE RÉSOLUTION
-            const imagePath = path.join(tempDir, `planning_${timestamp}.png`);
+            // Parser le fichier Excel avec Python
+            const pythonScript = generatePythonParser(xlsxPath);
+            const scriptPath = path.join(tempDir, `parser_${timestamp}.py`);
+            fs.writeFileSync(scriptPath, pythonScript);
+
+            const { stdout, stderr } = await execAsync(`python3 ${scriptPath}`);
             
-            try {
-                await execAsync(`pdftoppm -png -r 300 -singlefile "${pdfPath}" "${path.join(tempDir, `planning_${timestamp}`)}"`);
-            } catch (e) {
-                await execAsync(`convert -density 300 "${pdfPath}[0]" "${imagePath}"`);
+            if (stderr && !stderr.includes('UserWarning')) {
+                console.error('Python stderr:', stderr);
             }
 
-            const imageBuffer = fs.readFileSync(imagePath);
-            const base64Image = imageBuffer.toString('base64');
-
-            // Initialiser Gemini
-            const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-            const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-
-            // ÉTAPE 1 : Récupérer les métadonnées
-            await planningBot.editMessageText('🤖 Lecture des métadonnées...', { chat_id: chatId, message_id: statusMsg.message_id });
+            // Parser le résultat JSON
+            const result = JSON.parse(stdout);
             
-            const metaPrompt = `Regarde ce planning et donne-moi UNIQUEMENT ces informations :
-SEMAINE: <numéro>
-ANNEE: <année>
-JOURS: <liste des jours avec dates, ex: Lu 26, Ma 27, Me 28, Je 29, Ve 30, Sa 31, Di 1>
-MOIS_DEBUT: <mois du premier jour, 1-12>
-MOIS_FIN: <mois du dernier jour, 1-12>
-
-Réponds UNIQUEMENT avec ces 5 lignes, rien d'autre.`;
-
-            const metaResult = await model.generateContent([
-                metaPrompt,
-                { inlineData: { mimeType: 'image/png', data: base64Image } }
-            ]);
-            
-            const metaText = metaResult.response.text();
-            console.log('📋 Metadata:', metaText);
-            
-            const metadata = parseMetadata(metaText);
-            const joursStr = metadata.jours.map((j, idx) => ['Lu', 'Ma', 'Me', 'Je', 'Ve', 'Sa', 'Di'][idx] + ' ' + j).join(', ');
-
-            // ÉTAPE 2 : Analyser CHAQUE employé individuellement
-            let allEmployeesData = {};
-            let processedCount = 0;
-
-            for (let i = 0; i < ALL_EMPLOYEES.length; i++) {
-                const employee = ALL_EMPLOYEES[i];
-                const lineNum = i + 1;
-                
-                processedCount++;
-                await planningBot.editMessageText(
-                    `🔍 Analyse employé ${processedCount}/${ALL_EMPLOYEES.length}\n👤 ${employee}...`, 
-                    { chat_id: chatId, message_id: statusMsg.message_id }
-                );
-
-                const employeePrompt = `Ce planning a 22 lignes d'employés. Je veux UNIQUEMENT les créneaux de la LIGNE ${lineNum} : ${employee}
-
-STRUCTURE DU TABLEAU :
-- Colonne 1 (gauche) : Noms des employés
-- Colonnes 2-8 : Les 7 jours de la semaine (${joursStr})
-- Chaque ligne d'employé peut avoir plusieurs créneaux empilés verticalement
-
-LIGNE ${lineNum} - ${employee} :
-Regarde UNIQUEMENT cette ligne (la ${lineNum}ème ligne d'employé après l'en-tête).
-Lis TOUS les créneaux de cette ligne, de gauche à droite (Lundi à Dimanche).
-Un créneau = CODE HH:MM/HH:MM (ex: VDC 09:45/17:30)
-
-CODES POSSIBLES : VDC, EDF-A, EDF-B, EDF-C, C-PAD, PAD-A, CUP-R, CUP-L, L-REG, L-ARB, REU, ANNIV, AIDE, EV-RE, EV-LO, FORE, FORP
-
-FORMAT DE RÉPONSE (une seule ligne) :
-${employee}: Lu CODE HH:MM/HH:MM, Ma CODE HH:MM/HH:MM, ...
-
-Si cette ligne n'a AUCUN créneau visible (ligne vide), réponds :
-${employee}: REPOS
-
-IMPORTANT : Ne regarde QUE la ligne ${lineNum}, ignore toutes les autres lignes.`;
-
-                try {
-                    const empResult = await model.generateContent([
-                        employeePrompt,
-                        { inlineData: { mimeType: 'image/png', data: base64Image } }
-                    ]);
-                    
-                    const empText = empResult.response.text().trim();
-                    console.log(`📋 ${employee}:`, empText);
-                    
-                    // Parser la réponse
-                    const creneaux = parseEmployeeResponse(empText, metadata.jours, employee);
-                    allEmployeesData[employee] = creneaux;
-                    
-                    // Délai pour éviter rate limiting (Gemini 1.5 Pro = 2 req/min en gratuit)
-                    // En payant c'est 1000 req/min, donc on met un petit délai
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    
-                } catch (empError) {
-                    console.error(`❌ Erreur ${employee}:`, empError.message);
-                    allEmployeesData[employee] = {};
-                    
-                    // Si rate limit, attendre plus longtemps
-                    if (empError.message.includes('429') || empError.message.includes('quota')) {
-                        console.log('⏳ Rate limit, attente 30s...');
-                        await planningBot.editMessageText(
-                            `⏳ Pause API (rate limit)... Reprise dans 30s\n👤 ${employee}`, 
-                            { chat_id: chatId, message_id: statusMsg.message_id }
-                        );
-                        await new Promise(resolve => setTimeout(resolve, 30000));
-                    }
-                }
+            if (result.error) {
+                throw new Error(result.error);
             }
+
+            const { semaine, annee, mois_debut, mois_fin, jours, planning } = result;
+
+            await planningBot.editMessageText(
+                `✅ Planning S${semaine} parsé!\n` +
+                `📅 ${jours[0]} ${MOIS_NOMS[mois_debut]} - ${jours[6]} ${MOIS_NOMS[mois_fin]}\n` +
+                `📊 Génération des fichiers...`,
+                { chat_id: chatId, message_id: statusMsg.message_id }
+            );
 
             // Construire planningData
+            const mois_jours = jours.map((j, idx) => {
+                if (idx > 0 && j < jours[idx - 1]) return mois_fin;
+                return mois_debut;
+            });
+
             const planningData = {
-                semaine: metadata.semaine,
-                annee: metadata.annee,
-                date_debut: metadata.date_debut,
-                date_fin: metadata.date_fin,
-                jours: metadata.jours,
-                mois_jours: metadata.mois_jours,
-                employes: allEmployeesData
+                semaine,
+                annee,
+                date_debut: `${jours[0]} ${MOIS_NOMS[mois_debut]}`,
+                date_fin: `${jours[6]} ${MOIS_NOMS[mois_fin]}`,
+                jours,
+                mois_jours,
+                employes: planning
             };
 
-            const employesActifs = Object.keys(planningData.employes).filter(
-                e => Object.keys(planningData.employes[e]).length > 0
+            // Compter employés actifs et créneaux
+            const employesActifs = Object.keys(planning).filter(
+                e => Object.keys(planning[e]).length > 0 && 
+                     Object.values(planning[e]).some(arr => arr.length > 0)
             );
-            const nbEmployes = employesActifs.length;
-            const semaine = planningData.semaine;
             
             let totalCreneaux = 0;
-            for (const emp of Object.values(planningData.employes)) {
+            for (const emp of Object.values(planning)) {
                 for (const jour of Object.values(emp)) {
                     totalCreneaux += jour.length;
                 }
             }
-            
+
             await planningBot.editMessageText(
                 `✅ Planning S${semaine} analysé!\n` +
                 `📅 ${planningData.date_debut} - ${planningData.date_fin}\n` +
-                `👥 ${nbEmployes} employés actifs\n` +
+                `👥 ${employesActifs.length} employés actifs\n` +
                 `📊 ${totalCreneaux} créneaux détectés\n\n` +
                 `📝 Génération des fichiers iCal...`,
                 { chat_id: chatId, message_id: statusMsg.message_id }
@@ -271,7 +187,7 @@ IMPORTANT : Ne regarde QUE la ligne ${lineNum}, ignore toutes les autres lignes.
             }
 
             // Générer les fichiers
-            const icsFiles = generateAllICS(planningData);
+            const icsFiles = generateAllICS(planningData, employesActifs);
             const nbFichiers = Object.keys(icsFiles).length;
             
             const weekDataFile = `data/S${semaine}.json`;
@@ -280,7 +196,7 @@ IMPORTANT : Ne regarde QUE la ligne ${lineNum}, ignore toutes les autres lignes.
                 annee: planningData.annee,
                 date_debut: planningData.date_debut,
                 date_fin: planningData.date_fin,
-                employesActifs: employesActifs
+                employesActifs
             };
             
             const indexHtml = generateWeekHtml(planningData, employesActifs, existingWeeks);
@@ -302,12 +218,11 @@ IMPORTANT : Ne regarde QUE la ligne ${lineNum}, ignore toutes les autres lignes.
 
             // Message final
             const siteUrl = 'https://planning-urbansoccer.onrender.com';
-            
             const employesRepos = ALL_EMPLOYEES.filter(e => !employesActifs.includes(e));
             
             let finalMessage = `🎉 Planning S${semaine} publié!\n\n` +
                 `📅 ${planningData.date_debut} → ${planningData.date_fin}\n` +
-                `👥 ${nbEmployes} actifs / ${ALL_EMPLOYEES.length} total\n` +
+                `👥 ${employesActifs.length} actifs / ${ALL_EMPLOYEES.length} total\n` +
                 `📊 ${totalCreneaux} créneaux\n\n` +
                 `🔗 ${siteUrl}\n\n`;
             
@@ -319,8 +234,8 @@ IMPORTANT : Ne regarde QUE la ligne ${lineNum}, ignore toutes les autres lignes.
 
             // Nettoyer
             try {
-                fs.unlinkSync(pdfPath);
-                fs.unlinkSync(imagePath);
+                fs.unlinkSync(xlsxPath);
+                fs.unlinkSync(scriptPath);
             } catch (e) {}
 
         } catch (error) {
@@ -332,93 +247,152 @@ IMPORTANT : Ne regarde QUE la ligne ${lineNum}, ignore toutes les autres lignes.
     return planningBot;
 }
 
-function parseMetadata(text) {
-    const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-    
-    let semaine = 1, annee = 2026, jours = [], moisDebut = 1, moisFin = 1;
-    
-    for (const line of lines) {
-        if (line.startsWith('SEMAINE:')) {
-            semaine = parseInt(line.replace('SEMAINE:', '').trim()) || 1;
-        } else if (line.startsWith('ANNEE:')) {
-            annee = parseInt(line.replace('ANNEE:', '').trim()) || 2026;
-        } else if (line.startsWith('JOURS:')) {
-            const joursStr = line.replace('JOURS:', '').trim();
-            const joursMatch = joursStr.match(/\d+/g);
-            if (joursMatch) {
-                jours = joursMatch.map(j => parseInt(j));
-            }
-        } else if (line.startsWith('MOIS_DEBUT:')) {
-            moisDebut = parseInt(line.replace('MOIS_DEBUT:', '').trim()) || 1;
-        } else if (line.startsWith('MOIS_FIN:')) {
-            moisFin = parseInt(line.replace('MOIS_FIN:', '').trim()) || 1;
-        }
-    }
-    
-    const mois_jours = jours.map((j, idx) => {
-        if (idx > 0 && j < jours[idx - 1]) return moisFin;
-        return moisDebut;
-    });
-    
-    const moisNoms = ['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 
-                     'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
-    
-    return {
-        semaine, annee, jours, mois_jours, moisDebut, moisFin,
-        date_debut: jours.length > 0 ? `${jours[0]} ${moisNoms[moisDebut]}` : '',
-        date_fin: jours.length > 0 ? `${jours[jours.length - 1]} ${moisNoms[moisFin]}` : ''
-    };
-}
+function generatePythonParser(xlsxPath) {
+    return `
+import pandas as pd
+import json
+import sys
+import re
 
-function parseEmployeeResponse(text, jours, employeeName) {
-    const result = {};
+try:
+    df = pd.read_excel('${xlsxPath}', header=None)
     
-    // Nettoyer le texte
-    let cleanText = text;
-    if (cleanText.includes(':')) {
-        cleanText = cleanText.substring(cleanText.indexOf(':') + 1).trim();
-    }
+    # Extraire métadonnées
+    semaine = None
+    annee = None
+    mois_debut = None
+    mois_fin = None
+    jours = []
     
-    // Si REPOS
-    if (cleanText.toUpperCase().includes('REPOS') || cleanText === '-' || cleanText === '') {
-        return {};
-    }
+    # Chercher la semaine (ligne 1)
+    for idx, row in df.iterrows():
+        for cell in row:
+            if pd.notna(cell) and isinstance(cell, str):
+                if 'Sem' in cell:
+                    match = re.search(r'Sem\\s*(\\d+)', cell)
+                    if match:
+                        semaine = int(match.group(1))
+                if any(m in cell for m in ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 
+                                            'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre']):
+                    # Extraire année
+                    year_match = re.search(r'(\\d{4})', cell)
+                    if year_match:
+                        annee = int(year_match.group(1))
+                    # Détecter le mois
+                    mois_map = {'Janvier': 1, 'Février': 2, 'Mars': 3, 'Avril': 4, 'Mai': 5, 'Juin': 6,
+                               'Juillet': 7, 'Août': 8, 'Septembre': 9, 'Octobre': 10, 'Novembre': 11, 'Décembre': 12}
+                    for m_name, m_num in mois_map.items():
+                        if m_name in cell:
+                            if mois_debut is None:
+                                mois_debut = m_num
+                            mois_fin = m_num
+        if semaine and annee:
+            break
     
-    // Parser les créneaux
-    const regex = /(Lu|Ma|Me|Je|Ve|Sa|Di|Lun|Mar|Mer|Jeu|Ven|Sam|Dim)\s+([A-Z][A-Z0-9\-]+)\s+(\d{1,2}:\d{2})\/(\d{1,2}:\d{2})/gi;
+    # Chercher la ligne des jours (contient "Lu", "Ma", etc.)
+    jours_row = None
+    for idx, row in df.iterrows():
+        cell0 = row[0]
+        if pd.notna(cell0) and isinstance(cell0, str) and 'Nom' in cell0:
+            jours_row = idx
+            break
     
-    let match;
-    while ((match = regex.exec(cleanText)) !== null) {
-        const jourAbbr = match[1].substring(0, 2);
-        const jourAbbrNorm = jourAbbr.charAt(0).toUpperCase() + jourAbbr.charAt(1).toLowerCase();
-        const code = match[2].toUpperCase();
-        const debut = match[3];
-        const fin = match[4];
+    if jours_row is not None:
+        for col in range(1, 8):
+            cell = df.iloc[jours_row, col]
+            if pd.notna(cell) and isinstance(cell, str):
+                # Extraire le numéro du jour
+                match = re.search(r'(\\d+)', cell)
+                if match:
+                    jours.append(int(match.group(1)))
+    
+    # Détecter changement de mois dans les jours
+    if len(jours) == 7:
+        for i in range(1, 7):
+            if jours[i] < jours[i-1]:
+                # Changement de mois après le jour i-1
+                mois_fin = mois_debut + 1 if mois_debut < 12 else 1
+                break
+    
+    # Parser le planning
+    LEGENDE = ["VDC", "EDF-A", "EDF-B", "EDF-C", "C-PAD", "PAD-A", "CUP-R", "CUP-L", 
+               "L-REG", "L-ARB", "REU", "ANNIV", "AIDE", "EV-RE", "EV-LO", "FORE", "FORP", 
+               "INVEN", "COMMS"]
+    
+    planning = {}
+    employee_rows = {}
+    
+    # Identifier les lignes d'employés
+    for idx, row in df.iterrows():
+        if idx <= jours_row:
+            continue
+        name = row[0]
+        if pd.notna(name) and isinstance(name, str) and name.strip():
+            employee_rows[idx] = name.strip()
+    
+    emp_indices = sorted(employee_rows.keys())
+    
+    for i, start_idx in enumerate(emp_indices):
+        emp_name = employee_rows[start_idx]
+        end_idx = emp_indices[i + 1] if i + 1 < len(emp_indices) else len(df)
         
-        const jourIndex = JOURS_MAP[jourAbbrNorm];
+        planning[emp_name] = {}
         
-        if (jourIndex !== undefined && jours[jourIndex] !== undefined) {
-            const jourNum = jours[jourIndex].toString();
+        for col_idx, jour in enumerate(jours):
+            col = col_idx + 1
+            codes = []
+            times = []
             
-            if (!result[jourNum]) {
-                result[jourNum] = [];
-            }
+            for row_idx in range(start_idx, end_idx):
+                cell = df.iloc[row_idx, col]
+                if pd.notna(cell) and isinstance(cell, str):
+                    cell = cell.strip()
+                    if cell in LEGENDE:
+                        codes.append(cell)
+                    elif '/' in cell and ':' in cell:
+                        time_str = cell.replace('+', '')
+                        times.append(time_str)
             
-            result[jourNum].push({ code, debut, fin });
-        }
+            if codes and times:
+                planning[emp_name][str(jour)] = []
+                for code, time in zip(codes, times):
+                    parts = time.split('/')
+                    if len(parts) >= 2:
+                        debut = parts[0].strip()
+                        fin = parts[1].strip()
+                        if fin == '00':
+                            fin = '24:00'
+                        planning[emp_name][str(jour)].append({
+                            'code': code,
+                            'debut': debut,
+                            'fin': fin
+                        })
+    
+    result = {
+        'semaine': semaine or 1,
+        'annee': annee or 2026,
+        'mois_debut': mois_debut or 1,
+        'mois_fin': mois_fin or mois_debut or 1,
+        'jours': jours,
+        'planning': planning
     }
     
-    return result;
+    print(json.dumps(result))
+
+except Exception as e:
+    print(json.dumps({'error': str(e)}))
+    sys.exit(1)
+`;
 }
 
 async function getExistingWeeks() {
     try {
-        const url = `https://api.github.com/repos/${GITHUB_REPO}/contents/data`;
+        const url = \`https://api.github.com/repos/\${GITHUB_REPO}/contents/data\`;
         const response = await axios.get(url, {
-            headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' }
+            headers: { 'Authorization': \`token \${GITHUB_TOKEN}\`, 'Accept': 'application/vnd.github.v3+json' }
         });
         return response.data
-            .filter(f => f.name.match(/^S\d+\.json$/))
+            .filter(f => f.name.match(/^S\\d+\\.json$/))
             .map(f => parseInt(f.name.replace('S', '').replace('.json', '')))
             .sort((a, b) => a - b);
     } catch (e) {
@@ -431,26 +405,26 @@ function generateWeekHtml(planningData, employesActifs, allWeeks) {
     
     const weeksTabsHtml = allWeeks.map(w => {
         const isActive = w === semaine;
-        return `            <a href="${w === semaine ? '#' : `S${w}.html`}" class="week-tab ${isActive ? 'active' : ''}">S${w}</a>`;
-    }).join('\n');
+        return \`            <a href="\${w === semaine ? '#' : \`S\${w}.html\`}" class="week-tab \${isActive ? 'active' : ''}">S\${w}</a>\`;
+    }).join('\\n');
     
     const employeesHtml = ALL_EMPLOYEES.map(emp => {
-        const fileName = emp.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+        const fileName = emp.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').replace(/\\s+/g, '-').replace(/[^a-z0-9-]/g, '');
         const isActif = employesActifs.includes(emp);
         
         if (isActif) {
-            return `            <a href="ics/${fileName}.ics" class="employee">${emp}</a>`;
+            return \`            <a href="ics/\${fileName}.ics" class="employee">\${emp}</a>\`;
         } else {
-            return `            <div class="employee repos">${emp} <span class="badge">Repos</span></div>`;
+            return \`            <div class="employee repos">\${emp} <span class="badge">Repos</span></div>\`;
         }
-    }).join('\n');
+    }).join('\\n');
 
-    return `<!DOCTYPE html>
+    return \`<!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Planning Urban 7D - S${semaine}</title>
+    <title>Planning Urban 7D - S\${semaine}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -480,30 +454,30 @@ function generateWeekHtml(planningData, employesActifs, allWeeks) {
         <div class="header">
             <div class="logo">⚽</div>
             <h1>Planning Urban 7D</h1>
-            <p class="subtitle">Semaine ${semaine}</p>
-            <div class="dates">${date_debut || ''} → ${date_fin || ''}</div>
+            <p class="subtitle">Semaine \${semaine}</p>
+            <div class="dates">\${date_debut || ''} → \${date_fin || ''}</div>
         </div>
         <div class="week-selector">
-${weeksTabsHtml}
+\${weeksTabsHtml}
         </div>
         <div class="employees">
-${employeesHtml}
+\${employeesHtml}
         </div>
         <div class="footer"><p>Cliquez sur votre nom pour ajouter le planning à votre calendrier</p></div>
     </div>
 </body>
-</html>`;
+</html>\`;
 }
 
 function generateICS(employeeName, creneaux, planningData) {
     const { semaine, annee, jours, mois_jours } = planningData;
     
-    let ics = `BEGIN:VCALENDAR
+    let ics = \`BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//Planning Urban 7D//FR
 CALSCALE:GREGORIAN
 METHOD:PUBLISH
-X-WR-CALNAME:Planning ${employeeName}
+X-WR-CALNAME:Planning \${employeeName}
 X-WR-TIMEZONE:Europe/Paris
 BEGIN:VTIMEZONE
 TZID:Europe/Paris
@@ -522,36 +496,49 @@ DTSTART:19700329T020000
 RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU
 END:DAYLIGHT
 END:VTIMEZONE
-`;
+\`;
 
     let eventId = 1;
     
     for (const [jourStr, events] of Object.entries(creneaux)) {
         const jour = parseInt(jourStr);
         const jourIndex = jours.indexOf(jour);
-        const moisJour = jourIndex >= 0 ? mois_jours[jourIndex] : 1;
+        const moisJour = jourIndex >= 0 ? mois_jours[jourIndex] : mois_jours[0];
         
         for (const event of events) {
             const description = LEGENDE[event.code] || event.code;
             const [hDebut, mDebut] = event.debut.split(':').map(Number);
-            const [hFin, mFin] = event.fin.split(':').map(Number);
+            
+            let hFin, mFin;
+            const finParts = event.fin.split(':');
+            hFin = parseInt(finParts[0]);
+            mFin = parseInt(finParts[1]) || 0;
             
             let jourFin = jour, moisFin = moisJour, hFinAdjusted = hFin;
-            if (hFin === 24 || hFin === 0) { hFinAdjusted = 0; jourFin = jour + 1; }
+            if (hFin >= 24) { 
+                hFinAdjusted = hFin - 24; 
+                jourFin = jour + 1;
+                // Gérer changement de mois
+                const maxJour = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][moisJour - 1];
+                if (jourFin > maxJour) {
+                    jourFin = 1;
+                    moisFin = moisJour + 1;
+                }
+            }
             
-            const dateDebut = `${annee}${String(moisJour).padStart(2, '0')}${String(jour).padStart(2, '0')}T${String(hDebut).padStart(2, '0')}${String(mDebut).padStart(2, '0')}00`;
-            const dateFin = `${annee}${String(moisFin).padStart(2, '0')}${String(jourFin).padStart(2, '0')}T${String(hFinAdjusted).padStart(2, '0')}${String(mFin).padStart(2, '0')}00`;
-            const uid = `${employeeName.toLowerCase().replace(/\s+/g, '-').normalize('NFD').replace(/[\u0300-\u036f]/g, '')}-s${semaine}-${eventId}@urban7d`;
+            const dateDebut = \`\${annee}\${String(moisJour).padStart(2, '0')}\${String(jour).padStart(2, '0')}T\${String(hDebut).padStart(2, '0')}\${String(mDebut).padStart(2, '0')}00\`;
+            const dateFin = \`\${annee}\${String(moisFin).padStart(2, '0')}\${String(jourFin).padStart(2, '0')}T\${String(hFinAdjusted).padStart(2, '0')}\${String(mFin).padStart(2, '0')}00\`;
+            const uid = \`\${employeeName.toLowerCase().replace(/\\s+/g, '-').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')}-s\${semaine}-\${eventId}@urban7d\`;
             
-            ics += `BEGIN:VEVENT
-UID:${uid}
-DTSTAMP:${dateDebut}
-DTSTART:${dateDebut}
-DTEND:${dateFin}
-SUMMARY:${description}
-DESCRIPTION:${description}
+            ics += \`BEGIN:VEVENT
+UID:\${uid}
+DTSTAMP:\${dateDebut}
+DTSTART:\${dateDebut}
+DTEND:\${dateFin}
+SUMMARY:\${description}
+DESCRIPTION:\${description}
 END:VEVENT
-`;
+\`;
             eventId++;
         }
     }
@@ -560,45 +547,46 @@ END:VEVENT
     return ics;
 }
 
-function generateAllICS(planningData) {
+function generateAllICS(planningData, employesActifs) {
     const files = {};
     
-    for (const [employeeName, creneaux] of Object.entries(planningData.employes)) {
-        if (Object.keys(creneaux).length === 0) continue;
+    for (const employeeName of employesActifs) {
+        const creneaux = planningData.employes[employeeName];
+        if (!creneaux || Object.keys(creneaux).length === 0) continue;
         
-        const fileName = employeeName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-        files[`ics/${fileName}.ics`] = generateICS(employeeName, creneaux, planningData);
+        const fileName = employeeName.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').replace(/\\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+        files[\`ics/\${fileName}.ics\`] = generateICS(employeeName, creneaux, planningData);
     }
     
     return files;
 }
 
 async function uploadToGitHub(files, semaine) {
-    const baseUrl = `https://api.github.com/repos/${GITHUB_REPO}/contents`;
+    const baseUrl = \`https://api.github.com/repos/\${GITHUB_REPO}/contents\`;
     
     for (const [filePath, content] of Object.entries(files)) {
-        const url = `${baseUrl}/${filePath}`;
+        const url = \`\${baseUrl}/\${filePath}\`;
         const contentBase64 = Buffer.from(content).toString('base64');
         
         try {
             let sha = null;
             try {
                 const existingFile = await axios.get(url, {
-                    headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' }
+                    headers: { 'Authorization': \`token \${GITHUB_TOKEN}\`, 'Accept': 'application/vnd.github.v3+json' }
                 });
                 sha = existingFile.data.sha;
             } catch (e) {}
             
-            const data = { message: `Mise à jour planning S${semaine}`, content: contentBase64 };
+            const data = { message: \`Mise à jour planning S\${semaine}\`, content: contentBase64 };
             if (sha) data.sha = sha;
             
             await axios.put(url, data, {
-                headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' }
+                headers: { 'Authorization': \`token \${GITHUB_TOKEN}\`, 'Accept': 'application/vnd.github.v3+json' }
             });
             
-            console.log(`✅ Planning: Uploaded ${filePath}`);
+            console.log(\`✅ Planning: Uploaded \${filePath}\`);
         } catch (error) {
-            console.error(`❌ Planning: Error uploading ${filePath}:`, error.response?.data || error.message);
+            console.error(\`❌ Planning: Error uploading \${filePath}:\`, error.response?.data || error.message);
             throw error;
         }
     }
