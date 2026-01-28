@@ -516,11 +516,11 @@ async function sendEmailBrevo({ name, email, message, product, product_url, acti
       body: JSON.stringify({
         sender: {
           name: 'PPATCH Contact',
-          email: 'contact@ppatch.fr'
+          email: 'contact@ppatch.shop'
         },
         to: [
           {
-            email: 'contact@ppatch.fr',
+            email: 'contact@ppatch.shop',
             name: 'PPATCH'
           }
         ],
