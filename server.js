@@ -13,6 +13,8 @@ import errorHandler from './middleware/errorHandler.js';
 import { User } from './models/User.js';
 import { getClientIP } from './utils/helpers.js';
 import webhookRoutes from './routes/webhooks.js';
+import { GoogleSpreadsheet } from 'google-spreadsheet';
+import { JWT } from 'google-auth-library';
 import {
   extractColors,
   generatePatch,
@@ -392,6 +394,256 @@ app.post('/api/create-shopify-product', async (req, res, next) => {
     next(error);
   }
 });
+
+// ============================================
+// ROUTE: FORMULAIRE DE CONTACT (BREVO + GOOGLE SHEETS)
+// ============================================
+
+app.post('/api/contact-form', async (req, res) => {
+  console.log('📧 Nouvelle demande de contact reçue');
+  
+  try {
+    const { name, email, message, product, product_url, action_type } = req.body;
+    
+    // Validation des champs requis
+    if (!name || !email || !message || !action_type) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Champs requis manquants' 
+      });
+    }
+    
+    console.log(`📝 Type: ${action_type}, Produit: ${product}`);
+    
+    // 1. Envoyer l'email via Brevo
+    const emailSent = await sendEmailBrevo({
+      name,
+      email,
+      message,
+      product,
+      product_url,
+      action_type
+    });
+    
+    if (!emailSent) {
+      throw new Error('Échec envoi email Brevo');
+    }
+    
+    // 2. Mettre à jour la BDD Google Sheets
+    const clubUpdated = await updateClubInSheet({
+      product,
+      product_url,
+      action_type
+    });
+    
+    console.log(`✅ Email envoyé, BDD ${clubUpdated ? 'mise à jour' : 'club non trouvé'}`);
+    
+    res.json({ 
+      success: true, 
+      message: 'Message envoyé avec succès',
+      clubFound: clubUpdated
+    });
+    
+  } catch (error) {
+    console.error('❌ Erreur contact-form:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Erreur lors de l\'envoi' 
+    });
+  }
+});
+
+// ============================================
+// FONCTION ENVOI EMAIL BREVO
+// ============================================
+
+async function sendEmailBrevo({ name, email, message, product, product_url, action_type }) {
+  const BREVO_API_KEY = process.env.BREVO_API_KEY;
+  
+  if (!BREVO_API_KEY) {
+    console.error('❌ BREVO_API_KEY non configurée');
+    return false;
+  }
+  
+  // Définir le sujet selon le type d'action
+  const subjects = {
+    'modification': `🔧 Demande de modification - ${product}`,
+    'collaboration': `🤝 Demande de collaboration - ${product}`,
+    'suppression': `🗑️ Demande de suppression - ${product}`
+  };
+  
+  const subject = subjects[action_type] || `📧 Contact - ${product}`;
+  
+  // Construire le contenu HTML de l'email
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <div style="background-color: #8B2332; color: white; padding: 20px; text-align: center;">
+        <h1 style="margin: 0;">PPATCH - Nouvelle demande</h1>
+      </div>
+      
+      <div style="padding: 20px; background-color: #f9f9f9;">
+        <p><strong>Type de demande :</strong> ${action_type.toUpperCase()}</p>
+        <p><strong>Produit concerné :</strong> ${product}</p>
+        <p><strong>URL :</strong> <a href="${product_url}">${product_url}</a></p>
+        
+        <hr style="border: 1px solid #ddd; margin: 20px 0;">
+        
+        <p><strong>Nom :</strong> ${name}</p>
+        <p><strong>Email :</strong> <a href="mailto:${email}">${email}</a></p>
+        
+        <hr style="border: 1px solid #ddd; margin: 20px 0;">
+        
+        <p><strong>Message :</strong></p>
+        <div style="background-color: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd;">
+          ${message.replace(/\n/g, '<br>')}
+        </div>
+      </div>
+      
+      <div style="background-color: #333; color: white; padding: 10px; text-align: center; font-size: 12px;">
+        Email envoyé automatiquement depuis ppatch.shop
+      </div>
+    </div>
+  `;
+  
+  try {
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': BREVO_API_KEY,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        sender: {
+          name: 'PPATCH Contact',
+          email: 'contact@ppatch.fr'
+        },
+        to: [
+          {
+            email: 'contact@ppatch.fr',
+            name: 'PPATCH'
+          }
+        ],
+        replyTo: {
+          email: email,
+          name: name
+        },
+        subject: subject,
+        htmlContent: htmlContent
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('❌ Erreur Brevo:', errorData);
+      return false;
+    }
+    
+    console.log('✅ Email Brevo envoyé');
+    return true;
+    
+  } catch (error) {
+    console.error('❌ Erreur envoi Brevo:', error);
+    return false;
+  }
+}
+
+// ============================================
+// FONCTION MISE À JOUR GOOGLE SHEETS
+// ============================================
+
+async function updateClubInSheet({ product, product_url, action_type }) {
+  const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
+  const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+  const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID;
+  
+  if (!GOOGLE_CLIENT_EMAIL || !GOOGLE_PRIVATE_KEY || !GOOGLE_SHEET_ID) {
+    console.error('❌ Variables Google Sheets non configurées');
+    return false;
+  }
+  
+  try {
+    // Connexion à Google Sheets
+    const auth = new JWT({
+      email: GOOGLE_CLIENT_EMAIL,
+      key: GOOGLE_PRIVATE_KEY,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    
+    const doc = new GoogleSpreadsheet(GOOGLE_SHEET_ID, auth);
+    await doc.loadInfo();
+    
+    // Chercher dans l'onglet "Exploitables"
+    const sheet = doc.sheetsByTitle['Exploitables'];
+    if (!sheet) {
+      console.error('❌ Onglet "Exploitables" non trouvé');
+      return false;
+    }
+    
+    const rows = await sheet.getRows();
+    
+    // Chercher le club par URL Shopify ou par nom de produit
+    let clubRow = null;
+    
+    for (const row of rows) {
+      const shopifyUrl = row.get('Statut_Shopify') || row.get('URL_Shopify') || '';
+      const clubName = row.get('Club') || row.get('Nom_Court') || '';
+      
+      // Matcher par URL (extraire le handle du produit)
+      if (shopifyUrl && product_url) {
+        const shopifyHandle = shopifyUrl.split('/').pop()?.split('?')[0];
+        const productHandle = product_url.split('/').pop()?.split('?')[0];
+        if (shopifyHandle && productHandle && shopifyHandle === productHandle) {
+          clubRow = row;
+          break;
+        }
+      }
+      
+      // Ou matcher par nom de club dans le titre du produit
+      if (clubName && product && product.toLowerCase().includes(clubName.toLowerCase())) {
+        clubRow = row;
+        break;
+      }
+    }
+    
+    if (!clubRow) {
+      console.log(`⚠️ Club non trouvé pour: ${product}`);
+      return false;
+    }
+    
+    // Mettre à jour la colonne correspondante avec la date au format français
+    const now = new Date();
+    const dateFormatted = now.toLocaleDateString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    }); // Format: DD/MM/YYYY
+    
+    const columnMap = {
+      'modification': 'Demande_Modification',
+      'collaboration': 'Demande_Collaboration',
+      'suppression': 'Demande_Suppression'
+    };
+    
+    const columnName = columnMap[action_type];
+    
+    if (columnName) {
+      try {
+        clubRow.set(columnName, dateFormatted);
+        await clubRow.save();
+        console.log(`✅ BDD mise à jour: ${columnName} = ${dateFormatted}`);
+      } catch (e) {
+        console.log(`⚠️ Colonne ${columnName} n'existe pas encore - à créer manuellement`);
+      }
+    }
+    
+    return true;
+    
+  } catch (error) {
+    console.error('❌ Erreur Google Sheets:', error);
+    return false;
+  }
+}
 
 // ============================================
 // ROUTES - WEBHOOKS SHOPIFY
