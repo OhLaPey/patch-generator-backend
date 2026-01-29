@@ -49,6 +49,8 @@ const patchSchema = new mongoose.Schema({
   shape: String,
   club_name: String,
   status: String,
+  shopify_product_url: String,
+  shopify_product_id: String,
   created_at: { type: Date, default: Date.now },
 });
 
@@ -121,13 +123,16 @@ async function createOrUpdateBrevoContact(user) {
       : '',
   };
 
-  // Ajouter l'URL du dernier patch si disponible
+  // Ajouter les infos du dernier patch si disponible
   if (user.patches && user.patches.length > 0) {
-    attributes.DERNIER_PATCH_URL = user.patches[0].generated_image_url || '';
-    attributes.DERNIER_PATCH_DATE = user.patches[0].created_at
-      ? new Date(user.patches[0].created_at).toISOString().split('T')[0]
+    const lastPatch = user.patches[0];
+    
+    attributes.DERNIER_PATCH_URL = lastPatch.generated_image_url || '';
+    attributes.DERNIER_PATCH_DATE = lastPatch.created_at
+      ? new Date(lastPatch.created_at).toISOString().split('T')[0]
       : '';
-    attributes.CLUB_NAME = user.patches[0].club_name || '';
+    attributes.CLUB_NAME = lastPatch.club_name || '';
+    attributes.SHOPIFY_URL = lastPatch.shopify_product_url || '';
   }
 
   const body = {
