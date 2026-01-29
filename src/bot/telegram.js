@@ -1,12 +1,11 @@
 /**
- * PPATCH - Bot Telegram Unifié v5.15
+ * PPATCH - Bot Telegram Unifié v5.16
  * - /logo : Valider logos + créer pages
  * - /mail : Valider emails
  * - /sync : Synchroniser avec Shopify
  * - /stats : Statistiques
  * 
- * v5.15: Détection pages de match (Kalisport, etc.) avec plusieurs logos
- *        Tu peux choisir le logo du club adverse si besoin
+ * v5.16: Ajout attributs Brevo pour template démarchage (IMAGE_PATCH, LIEN_PAGE_PRODUIT)
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -765,6 +764,7 @@ async function getNextClubForEmail() {
     const shopifyUrl = row.get('Statut_Shopify');
     const email = row.get('Email_1');
     const status = row.get('Status');
+    const logo = row.get('Logo');
     if (shopifyUrl && shopifyUrl.startsWith('http') && email && !status) {
       return {
         row: row,
@@ -776,6 +776,7 @@ async function getNextClubForEmail() {
           departement: row.get('Departement'),
           codePostal: row.get('Code_Postal'),
           shopifyUrl: shopifyUrl,
+          logo: logo,
           rowIndex: row.rowNumber
         }
       };
@@ -847,10 +848,68 @@ async function deleteShopifyProduct(productId) {
   }
 }
 
-async function addToBrevo(email, clubName, sport, ville) {
+/**
+ * Récupère l'image principale du produit Shopify
+ */
+async function getShopifyProductImage(shopifyUrl) {
+  if (!CONFIG.shopifyStore || !CONFIG.shopifyAccessToken) {
+    return null;
+  }
+  
+  try {
+    const handle = await getProductHandleFromUrl(shopifyUrl);
+    if (!handle) return null;
+    
+    const response = await fetch(
+      'https://' + CONFIG.shopifyStore + '/admin/api/2024-01/products.json?handle=' + handle,
+      {
+        headers: {
+          'X-Shopify-Access-Token': CONFIG.shopifyAccessToken,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    
+    if (response.ok) {
+      const data = await response.json();
+      if (data.products && data.products.length > 0 && data.products[0].images && data.products[0].images.length > 0) {
+        return data.products[0].images[0].src;
+      }
+    }
+    return null;
+  } catch (error) {
+    console.error('❌ Erreur récupération image Shopify: ' + error.message);
+    return null;
+  }
+}
+
+/**
+ * v5.16: Ajout à Brevo avec tous les attributs nécessaires pour le template
+ * - NOM_CLUB: Nom du club
+ * - SPORT: Sport du club
+ * - VILLE: Ville du club
+ * - LIEN_PAGE_PRODUIT: URL de la page Shopify
+ * - IMAGE_PATCH: URL de l'image du patch (depuis Shopify)
+ */
+async function addToBrevo(email, clubName, sport, ville, shopifyUrl, logoUrl) {
   if (!CONFIG.brevoApiKey) {
     return { success: false, error: 'API Key manquante' };
   }
+  
+  // Récupérer l'image du produit Shopify si disponible
+  let imagePatch = logoUrl || '';
+  if (shopifyUrl) {
+    const shopifyImage = await getShopifyProductImage(shopifyUrl);
+    if (shopifyImage) {
+      imagePatch = shopifyImage;
+    }
+  }
+  
+  console.log('📧 Ajout Brevo: ' + email);
+  console.log('   NOM_CLUB: ' + clubName);
+  console.log('   LIEN_PAGE_PRODUIT: ' + shopifyUrl);
+  console.log('   IMAGE_PATCH: ' + imagePatch);
+  
   try {
     const response = await fetch('https://api.brevo.com/v3/contacts', {
       method: 'POST',
@@ -863,14 +922,17 @@ async function addToBrevo(email, clubName, sport, ville) {
         email: email,
         listIds: [CONFIG.brevoListId],
         attributes: {
-          NOM_CLUB: clubName,
+          NOM_CLUB: clubName || '',
           SPORT: sport || '',
-          VILLE: ville || ''
+          VILLE: ville || '',
+          LIEN_PAGE_PRODUIT: shopifyUrl || '',
+          IMAGE_PATCH: imagePatch
         },
         updateEnabled: true
       })
     });
     if (response.ok || response.status === 204) {
+      console.log('✅ Contact Brevo créé/mis à jour avec attributs complets');
       return { success: true };
     } else {
       const error = await response.json();
@@ -972,7 +1034,7 @@ function setupBotCommands() {
     }
     const stats = await getStats();
     bot.sendMessage(chatId,
-      '🎯 PPATCH Bot v5.15\n\n' +
+      '🎯 PPATCH Bot v5.16\n\n' +
       '🖼️ Logos: ' + stats.pendingLogo + ' à valider | ' + stats.createdLogo + ' créés\n' +
       '📧 Emails: ' + stats.pendingEmail + ' à valider | ' + stats.sentEmail + ' envoyés\n\n' +
       '📦 Cache: ' + clubCache.length + ' clubs pré-chargés\n' +
@@ -1185,11 +1247,21 @@ async function handleCallbackQuery(query) {
       }
       if (action === 'email_valid') {
         await safeAnswer('⏳ Ajout Brevo...');
-        const brevoResult = await addToBrevo(data.email, data.club, data.sport, data.ville);
+        
+        // v5.16: Passer tous les attributs nécessaires à addToBrevo
+        const brevoResult = await addToBrevo(
+          data.email, 
+          data.club, 
+          data.sport, 
+          data.ville,
+          data.shopifyUrl,  // URL de la page Shopify
+          data.logo         // URL du logo (fallback si pas d'image Shopify)
+        );
+        
         if (brevoResult.success) {
           row.set('Status', 'sent');
           await row.save();
-          await bot.sendMessage(chatId, '✅ ' + data.club + ' ajouté à Brevo !');
+          await bot.sendMessage(chatId, '✅ ' + data.club + ' ajouté à Brevo avec image + lien !');
         } else {
           await bot.sendMessage(chatId, '⚠️ Erreur Brevo: ' + brevoResult.error);
         }
@@ -1349,7 +1421,7 @@ export async function startTelegramBot() {
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.15 redémarré !\n\n🏀 Détection pages de match (logos adverses disponibles)');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.16 redémarré !\n\n✅ Attributs Brevo complets (IMAGE_PATCH, LIEN_PAGE_PRODUIT)');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
