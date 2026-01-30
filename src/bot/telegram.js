@@ -5,19 +5,22 @@
  * - /sync : Synchroniser avec Shopify
  * - /stats : Statistiques
  * 
- * v5.16: Ajout attributs Brevo pour template démarchage (IMAGE_PATCH, LIEN_PAGE_PRODUIT)
+ * v5.16: Base de données de logos avec détection Gemini
+ *        Stockage dans feuille "Logos_DB" cachée
  */
 
 import TelegramBot from 'node-telegram-bot-api';
 import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { JWT } from 'google-auth-library';
 import axios from 'axios';
+import { detectLogoName } from '../config/gemini.js';
 
 const getConfig = () => ({
   telegramToken: process.env.TELEGRAM_BOT_TOKEN,
   adminChatId: process.env.ADMIN_CHAT_ID || null,
   sheetId: process.env.GOOGLE_SHEET_ID,
   sheetName: 'Exploitables',
+  logosSheetName: 'Logos_DB',
   googleClientEmail: process.env.GOOGLE_CLIENT_EMAIL,
   googlePrivateKey: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
   brevoApiKey: process.env.BREVO_API_KEY,
@@ -31,6 +34,7 @@ const getConfig = () => ({
 let bot = null;
 let doc = null;
 let sheet = null;
+let logosSheet = null;
 let CONFIG = null;
 const userState = new Map();
 
@@ -55,6 +59,20 @@ async function initGoogleSheets() {
   if (!sheet) {
     throw new Error('Feuille "' + CONFIG.sheetName + '" non trouvée');
   }
+  
+  // Initialiser la feuille Logos_DB (créer si n'existe pas)
+  logosSheet = doc.sheetsByTitle[CONFIG.logosSheetName];
+  if (!logosSheet) {
+    console.log('📝 Création de la feuille Logos_DB...');
+    logosSheet = await doc.addSheet({
+      title: CONFIG.logosSheetName,
+      headerValues: ['URL', 'Detected_Name', 'Confidence', 'Source', 'Club_Name', 'Club_RowIndex', 'Status', 'Created_At', 'Verified_At']
+    });
+    // Cacher la feuille (optionnel - tu peux la montrer pour debug)
+    // await logosSheet.updateProperties({ hidden: true });
+    console.log('✅ Feuille Logos_DB créée');
+  }
+  
   console.log('📊 Google Sheets connecté: ' + doc.title);
   return sheet;
 }
@@ -72,6 +90,176 @@ async function isValidImageUrl(url) {
     } catch (e) {
       return false;
     }
+  }
+}
+
+// ============ BASE DE DONNÉES DE LOGOS v5.16 ============
+
+/**
+ * Télécharge une image et la convertit en base64
+ */
+async function imageUrlToBase64(url) {
+  try {
+    const response = await axios.get(url, {
+      timeout: 5000,
+      responseType: 'arraybuffer',
+      maxContentLength: 500000
+    });
+    const base64 = Buffer.from(response.data, 'binary').toString('base64');
+    return base64;
+  } catch (error) {
+    console.log('⚠️ Erreur téléchargement image: ' + error.message);
+    return null;
+  }
+}
+
+/**
+ * Détecte le nom sur un logo via Gemini et stocke dans Logos_DB
+ */
+async function detectAndStoreLogo(logoUrl, source, clubName = '', clubRowIndex = null) {
+  try {
+    if (!logosSheet) return null;
+    
+    // Vérifier si ce logo existe déjà dans la base
+    const existingLogo = await findLogoInDB(logoUrl);
+    if (existingLogo) {
+      console.log('📋 Logo déjà en base: ' + existingLogo.detected_name);
+      return existingLogo;
+    }
+    
+    // Télécharger l'image et convertir en base64
+    const base64Image = await imageUrlToBase64(logoUrl);
+    if (!base64Image) {
+      console.log('⚠️ Impossible de télécharger le logo');
+      return null;
+    }
+    
+    // Détecter le nom avec Gemini
+    console.log('🤖 Détection Gemini en cours...');
+    const detection = await detectLogoName(base64Image);
+    console.log('🏷️ Détection: ' + detection.name + ' (' + detection.confidence + ')');
+    
+    // Stocker dans Logos_DB
+    const now = new Date().toISOString();
+    await logosSheet.addRow({
+      'URL': logoUrl,
+      'Detected_Name': detection.name || '',
+      'Confidence': detection.confidence || 'none',
+      'Source': source,
+      'Club_Name': clubName,
+      'Club_RowIndex': clubRowIndex ? String(clubRowIndex) : '',
+      'Status': 'pending',
+      'Created_At': now,
+      'Verified_At': ''
+    });
+    
+    console.log('💾 Logo stocké dans Logos_DB');
+    
+    return {
+      url: logoUrl,
+      detected_name: detection.name,
+      confidence: detection.confidence,
+      source: source
+    };
+    
+  } catch (error) {
+    console.log('⚠️ Erreur detectAndStoreLogo: ' + error.message);
+    return null;
+  }
+}
+
+/**
+ * Cherche un logo dans la base par URL
+ */
+async function findLogoInDB(url) {
+  try {
+    if (!logosSheet) return null;
+    
+    const rows = await logosSheet.getRows();
+    for (const row of rows) {
+      if (row.get('URL') === url) {
+        return {
+          url: row.get('URL'),
+          detected_name: row.get('Detected_Name'),
+          confidence: row.get('Confidence'),
+          source: row.get('Source'),
+          status: row.get('Status'),
+          club_name: row.get('Club_Name')
+        };
+      }
+    }
+    return null;
+  } catch (error) {
+    console.log('⚠️ Erreur findLogoInDB: ' + error.message);
+    return null;
+  }
+}
+
+/**
+ * Cherche des logos vérifiés qui matchent un nom de club
+ */
+async function findVerifiedLogosForClub(clubName) {
+  try {
+    if (!logosSheet) return [];
+    
+    const rows = await logosSheet.getRows();
+    const matches = [];
+    
+    // Normaliser le nom du club pour la comparaison
+    const normalizedClubName = clubName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    
+    for (const row of rows) {
+      if (row.get('Status') !== 'verified') continue;
+      
+      const detectedName = row.get('Detected_Name') || '';
+      const storedClubName = row.get('Club_Name') || '';
+      
+      const normalizedDetected = detectedName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const normalizedStored = storedClubName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      
+      // Match si le nom détecté ou le nom de club stocké correspond
+      if (normalizedDetected.includes(normalizedClubName) || 
+          normalizedClubName.includes(normalizedDetected) ||
+          normalizedStored === normalizedClubName) {
+        matches.push({
+          url: row.get('URL'),
+          detected_name: detectedName,
+          source: row.get('Source'),
+          confidence: row.get('Confidence')
+        });
+      }
+    }
+    
+    return matches;
+  } catch (error) {
+    console.log('⚠️ Erreur findVerifiedLogosForClub: ' + error.message);
+    return [];
+  }
+}
+
+/**
+ * Marque un logo comme vérifié et l'associe à un club
+ */
+async function verifyLogo(logoUrl, clubName, clubRowIndex) {
+  try {
+    if (!logosSheet) return false;
+    
+    const rows = await logosSheet.getRows();
+    for (const row of rows) {
+      if (row.get('URL') === logoUrl) {
+        row.set('Status', 'verified');
+        row.set('Club_Name', clubName);
+        row.set('Club_RowIndex', String(clubRowIndex));
+        row.set('Verified_At', new Date().toISOString());
+        await row.save();
+        console.log('✅ Logo vérifié et associé à: ' + clubName);
+        return true;
+      }
+    }
+    return false;
+  } catch (error) {
+    console.log('⚠️ Erreur verifyLogo: ' + error.message);
+    return false;
   }
 }
 
@@ -389,9 +577,9 @@ async function searchLogoGoogle(clubName, sport, targetCount) {
 
 /**
  * Fonction principale: cherche les logos dans l'ordre optimal
- * v5.15: Mode "clubs faciles" + détection pages de match avec plusieurs logos
+ * v5.16: Détection du nom via Gemini + stockage dans Logos_DB
  */
-async function findAllLogos(clubName, besportLogo, sport) {
+async function findAllLogos(clubName, besportLogo, sport, clubRowIndex = null) {
   const logos = [];
   const seenUrls = new Set();
   
@@ -408,19 +596,35 @@ async function findAllLogos(clubName, besportLogo, sport) {
       // Si c'est une page de match avec plusieurs logos
       if (officialLogo.allLogos && officialLogo.allLogos.length > 1) {
         console.log('🏀 Page de match: ' + officialLogo.allLogos.length + ' logos trouvés');
-        officialLogo.allLogos.forEach(function(url, index) {
+        for (let index = 0; index < officialLogo.allLogos.length; index++) {
+          const url = officialLogo.allLogos[index];
           if (!seenUrls.has(url)) {
+            // Détecter le nom avec Gemini et stocker
+            const logoData = await detectAndStoreLogo(url, 'match_page', clubName, clubRowIndex);
+            const detectedName = logoData?.detected_name || '';
+            
             logos.push({ 
               source: 'Match logo ' + (index + 1), 
               url: url, 
-              emoji: index === 0 ? '🏠' : '🆚'
+              emoji: index === 0 ? '🏠' : '🆚',
+              detected_name: detectedName,
+              confidence: logoData?.confidence || 'none'
             });
             seenUrls.add(url);
           }
-        });
+        }
       } else {
         console.log('✅ Logo site officiel trouvé');
-        logos.push({ source: 'Site officiel', url: officialLogo.url, emoji: '🌐' });
+        // Détecter le nom avec Gemini et stocker
+        const logoData = await detectAndStoreLogo(officialLogo.url, 'site_officiel', clubName, clubRowIndex);
+        
+        logos.push({ 
+          source: 'Site officiel', 
+          url: officialLogo.url, 
+          emoji: '🌐',
+          detected_name: logoData?.detected_name || '',
+          confidence: logoData?.confidence || 'none'
+        });
         seenUrls.add(officialLogo.url);
       }
     }
@@ -437,7 +641,16 @@ async function findAllLogos(clubName, besportLogo, sport) {
     
     if (facebookLogo && facebookLogo.url && !seenUrls.has(facebookLogo.url)) {
       console.log('✅ Logo Facebook trouvé');
-      logos.push({ source: 'Facebook', url: facebookLogo.url, emoji: '📘' });
+      // Détecter le nom avec Gemini et stocker
+      const logoData = await detectAndStoreLogo(facebookLogo.url, 'facebook', clubName, clubRowIndex);
+      
+      logos.push({ 
+        source: 'Facebook', 
+        url: facebookLogo.url, 
+        emoji: '📘',
+        detected_name: logoData?.detected_name || '',
+        confidence: logoData?.confidence || 'none'
+      });
       seenUrls.add(facebookLogo.url);
     }
   } catch (e) {
@@ -563,7 +776,7 @@ async function preloadClubLogos() {
         if (alreadyCached) continue;
         
         console.log('📦 Pré-chargement: ' + clubInfo.data.club);
-        const logos = await findAllLogos(clubInfo.data.club, clubInfo.data.logo, clubInfo.data.sport);
+        const logos = await findAllLogos(clubInfo.data.club, clubInfo.data.logo, clubInfo.data.sport, clubInfo.rowIndex);
         
         // Si aucun logo fiable, marquer comme "difficile" et passer au suivant
         if (logos.length === 0) {
@@ -667,7 +880,7 @@ async function getNextClubFromCache() {
   // Marquer comme en cours
   processingRows.add(clubInfo.rowIndex);
   
-  const logos = await findAllLogos(clubInfo.data.club, clubInfo.data.logo, clubInfo.data.sport);
+  const logos = await findAllLogos(clubInfo.data.club, clubInfo.data.logo, clubInfo.data.sport, clubInfo.rowIndex);
   
   setTimeout(preloadClubLogos, 100);
   
@@ -764,7 +977,6 @@ async function getNextClubForEmail() {
     const shopifyUrl = row.get('Statut_Shopify');
     const email = row.get('Email_1');
     const status = row.get('Status');
-    const logo = row.get('Logo');
     if (shopifyUrl && shopifyUrl.startsWith('http') && email && !status) {
       return {
         row: row,
@@ -776,7 +988,6 @@ async function getNextClubForEmail() {
           departement: row.get('Departement'),
           codePostal: row.get('Code_Postal'),
           shopifyUrl: shopifyUrl,
-          logo: logo,
           rowIndex: row.rowNumber
         }
       };
@@ -848,68 +1059,10 @@ async function deleteShopifyProduct(productId) {
   }
 }
 
-/**
- * Récupère l'image principale du produit Shopify
- */
-async function getShopifyProductImage(shopifyUrl) {
-  if (!CONFIG.shopifyStore || !CONFIG.shopifyAccessToken) {
-    return null;
-  }
-  
-  try {
-    const handle = await getProductHandleFromUrl(shopifyUrl);
-    if (!handle) return null;
-    
-    const response = await fetch(
-      'https://' + CONFIG.shopifyStore + '/admin/api/2024-01/products.json?handle=' + handle,
-      {
-        headers: {
-          'X-Shopify-Access-Token': CONFIG.shopifyAccessToken,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    
-    if (response.ok) {
-      const data = await response.json();
-      if (data.products && data.products.length > 0 && data.products[0].images && data.products[0].images.length > 0) {
-        return data.products[0].images[0].src;
-      }
-    }
-    return null;
-  } catch (error) {
-    console.error('❌ Erreur récupération image Shopify: ' + error.message);
-    return null;
-  }
-}
-
-/**
- * v5.16: Ajout à Brevo avec tous les attributs nécessaires pour le template
- * - NOM_CLUB: Nom du club
- * - SPORT: Sport du club
- * - VILLE: Ville du club
- * - LIEN_PAGE_PRODUIT: URL de la page Shopify
- * - IMAGE_PATCH: URL de l'image du patch (depuis Shopify)
- */
-async function addToBrevo(email, clubName, sport, ville, shopifyUrl, logoUrl) {
+async function addToBrevo(email, clubName, sport, ville) {
   if (!CONFIG.brevoApiKey) {
     return { success: false, error: 'API Key manquante' };
   }
-  
-  // Récupérer l'image du produit Shopify si disponible
-  let imagePatch = logoUrl || '';
-  if (shopifyUrl) {
-    const shopifyImage = await getShopifyProductImage(shopifyUrl);
-    if (shopifyImage) {
-      imagePatch = shopifyImage;
-    }
-  }
-  
-  console.log('📧 Ajout Brevo: ' + email);
-  console.log('   NOM_CLUB: ' + clubName);
-  console.log('   LIEN_PAGE_PRODUIT: ' + shopifyUrl);
-  console.log('   IMAGE_PATCH: ' + imagePatch);
-  
   try {
     const response = await fetch('https://api.brevo.com/v3/contacts', {
       method: 'POST',
@@ -922,17 +1075,14 @@ async function addToBrevo(email, clubName, sport, ville, shopifyUrl, logoUrl) {
         email: email,
         listIds: [CONFIG.brevoListId],
         attributes: {
-          NOM_CLUB: clubName || '',
+          NOM_CLUB: clubName,
           SPORT: sport || '',
-          VILLE: ville || '',
-          LIEN_PAGE_PRODUIT: shopifyUrl || '',
-          IMAGE_PATCH: imagePatch
+          VILLE: ville || ''
         },
         updateEnabled: true
       })
     });
     if (response.ok || response.status === 204) {
-      console.log('✅ Contact Brevo créé/mis à jour avec attributs complets');
       return { success: true };
     } else {
       const error = await response.json();
@@ -1177,18 +1327,27 @@ async function sendNextLogo(chatId) {
     
     for (let i = 0; i < logos.length; i++) {
       const logo = logos[i];
+      // Construire la légende avec le nom détecté si disponible
+      let caption = logo.emoji + ' ' + logo.source;
+      if (logo.detected_name) {
+        const confidenceEmoji = logo.confidence === 'high' ? '✅' : (logo.confidence === 'medium' ? '💡' : '❓');
+        caption += '\n🏷️ Détecté: ' + logo.detected_name + ' ' + confidenceEmoji;
+      }
       try {
-        await bot.sendPhoto(chatId, logo.url, {
-          caption: logo.emoji + ' ' + logo.source
-        });
+        await bot.sendPhoto(chatId, logo.url, { caption: caption });
       } catch (e) {
-        await bot.sendMessage(chatId, logo.emoji + ' ' + logo.source + ': ' + logo.url);
+        await bot.sendMessage(chatId, caption + '\n🔗 ' + logo.url);
       }
     }
     
     const logoButtons = logos.map(function(logo, index) {
+      // Afficher le nom détecté dans le bouton si confiance haute
+      let buttonText = logo.emoji + ' ' + logo.source;
+      if (logo.detected_name && logo.confidence === 'high') {
+        buttonText = logo.emoji + ' ' + logo.detected_name.substring(0, 15);
+      }
       return {
-        text: logo.emoji + ' ' + logo.source,
+        text: buttonText,
         callback_data: 'logo_select_' + index
       };
     });
@@ -1247,21 +1406,11 @@ async function handleCallbackQuery(query) {
       }
       if (action === 'email_valid') {
         await safeAnswer('⏳ Ajout Brevo...');
-        
-        // v5.16: Passer tous les attributs nécessaires à addToBrevo
-        const brevoResult = await addToBrevo(
-          data.email, 
-          data.club, 
-          data.sport, 
-          data.ville,
-          data.shopifyUrl,  // URL de la page Shopify
-          data.logo         // URL du logo (fallback si pas d'image Shopify)
-        );
-        
+        const brevoResult = await addToBrevo(data.email, data.club, data.sport, data.ville);
         if (brevoResult.success) {
           row.set('Status', 'sent');
           await row.save();
-          await bot.sendMessage(chatId, '✅ ' + data.club + ' ajouté à Brevo avec image + lien !');
+          await bot.sendMessage(chatId, '✅ ' + data.club + ' ajouté à Brevo !');
         } else {
           await bot.sendMessage(chatId, '⚠️ Erreur Brevo: ' + brevoResult.error);
         }
@@ -1326,6 +1475,9 @@ async function handleCallbackQuery(query) {
         }
         await safeAnswer('⏳ Création en cours...');
         
+        // Marquer le logo comme vérifié dans Logos_DB
+        await verifyLogo(selectedLogo.url, data.club, rowIndex);
+        
         // Marquer comme processing AVANT de continuer
         await updateLogoStatus(row, 'processing');
         
@@ -1334,7 +1486,8 @@ async function handleCallbackQuery(query) {
         
         await bot.sendMessage(chatId,
           '⏳ Création de la page Shopify pour ' + data.club + '...\n' +
-          '📸 Logo: ' + selectedLogo.source + '\n' +
+          '📸 Logo: ' + selectedLogo.source + 
+          (selectedLogo.detected_name ? ' (' + selectedLogo.detected_name + ')' : '') + '\n' +
           '(génération visuels + produit, ~2-3 min)'
         );
         
@@ -1421,7 +1574,7 @@ export async function startTelegramBot() {
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.16 redémarré !\n\n✅ Attributs Brevo complets (IMAGE_PATCH, LIEN_PAGE_PRODUIT)');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.16 redémarré !\n\n🤖 Détection Gemini + Base Logos_DB');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
