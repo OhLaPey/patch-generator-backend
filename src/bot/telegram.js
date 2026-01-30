@@ -13,7 +13,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { JWT } from 'google-auth-library';
 import axios from 'axios';
-import { detectLogoName } from '../config/gemini.js';
+import { detectLogoName } from '../../config/gemini.js';
 
 const getConfig = () => ({
   telegramToken: process.env.TELEGRAM_BOT_TOKEN,
