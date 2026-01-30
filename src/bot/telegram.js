@@ -1,12 +1,14 @@
 /**
- * PPATCH - Bot Telegram Unifié v5.17
+ * PPATCH - Bot Telegram Unifié v5.18
  * - /logo : Valider logos + créer pages
  * - /mail : Valider emails
  * - /sync : Synchroniser avec Shopify
  * - /stats : Statistiques
+ * - /mem : État mémoire
+ * - /check : Réparer clubs bloqués
  * 
- * v5.17: Recherche par fédération (FFBB, FFF, FFR, FFHandball)
- *        Logos officiels en priorité selon le sport
+ * v5.18: Recherche fédérations déplacée vers programme séparé
+ *        Bot allégé pour économiser la mémoire Render
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -374,222 +376,6 @@ async function verifyLogo(logoUrl, clubName, clubRowIndex) {
   }
 }
 
-// ============ RECHERCHE PAR FÉDÉRATION v5.17 ============
-
-/**
- * Mapping sport -> fédération
- */
-const FEDERATIONS = {
-  'basketball': {
-    name: 'FFBB',
-    searchDomain: 'ffbb.com',
-    logoPatterns: [
-      /https?:\/\/[^"'\s]+\.ffbb\.com[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
-      /https?:\/\/[^"'\s]*ffbb[^"'\s]*\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
-      /https?:\/\/[^"'\s]*ffbb[^"'\s]*\/[^"'\s]*club[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi
-    ]
-  },
-  'basket': {
-    name: 'FFBB',
-    searchDomain: 'ffbb.com',
-    logoPatterns: [
-      /https?:\/\/[^"'\s]+\.ffbb\.com[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
-      /https?:\/\/[^"'\s]*ffbb[^"'\s]*\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi
-    ]
-  },
-  'football': {
-    name: 'FFF',
-    searchDomain: 'fff.fr',
-    logoPatterns: [
-      /https?:\/\/[^"'\s]+\.fff\.fr[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
-      /https?:\/\/[^"'\s]*fff[^"'\s]*\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
-      /https?:\/\/[^"'\s]*footeo[^"'\s]*\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi
-    ]
-  },
-  'rugby': {
-    name: 'FFR',
-    searchDomain: 'ffr.fr',
-    logoPatterns: [
-      /https?:\/\/[^"'\s]+\.ffr\.fr[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
-      /https?:\/\/[^"'\s]*ffr[^"'\s]*\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
-      /https?:\/\/[^"'\s]*ffr[^"'\s]*\/[^"'\s]*club[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi
-    ]
-  },
-  'handball': {
-    name: 'FFHandball',
-    searchDomain: 'ffhandball.fr',
-    logoPatterns: [
-      /https?:\/\/[^"'\s]+\.ffhandball\.fr[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
-      /https?:\/\/[^"'\s]*ffhandball[^"'\s]*\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
-      /https?:\/\/[^"'\s]*monclub\.ffhandball[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi
-    ]
-  },
-  'hand': {
-    name: 'FFHandball',
-    searchDomain: 'ffhandball.fr',
-    logoPatterns: [
-      /https?:\/\/[^"'\s]+\.ffhandball\.fr[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
-      /https?:\/\/[^"'\s]*monclub\.ffhandball[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi
-    ]
-  }
-};
-
-/**
- * Normalise le nom du sport pour le mapping
- */
-function normalizeSport(sport) {
-  if (!sport) return null;
-  const s = sport.toLowerCase().trim();
-  
-  if (s.includes('basket')) return 'basketball';
-  if (s.includes('foot') && !s.includes('volley')) return 'football';
-  if (s.includes('rugby')) return 'rugby';
-  if (s.includes('hand') && !s.includes('beach')) return 'handball';
-  
-  return s;
-}
-
-/**
- * Cherche le logo d'un club sur le site de sa fédération
- */
-async function searchLogoFromFederation(clubName, sport) {
-  const normalizedSport = normalizeSport(sport);
-  const federation = FEDERATIONS[normalizedSport];
-  
-  if (!federation) {
-    console.log('⚠️ Pas de fédération pour le sport: ' + sport);
-    return null;
-  }
-  
-  console.log('🏛️ Recherche ' + federation.name + ' pour: ' + clubName);
-  
-  try {
-    // Chercher la page du club sur le site de la fédération via Google
-    const query = 'site:' + federation.searchDomain + ' "' + clubName + '"';
-    const searchUrl = 'https://www.googleapis.com/customsearch/v1?key=' + CONFIG.googleApiKey + 
-                      '&cx=' + CONFIG.googleCx + '&q=' + encodeURIComponent(query) + '&num=3';
-    
-    const res = await axios.get(searchUrl, { timeout: 10000 });
-    
-    if (!res.data.items || res.data.items.length === 0) {
-      console.log('⚠️ Aucun résultat ' + federation.name);
-      return null;
-    }
-    
-    // Parcourir les résultats et extraire le logo
-    for (const item of res.data.items) {
-      const pageUrl = item.link;
-      console.log('🏛️ Page ' + federation.name + ': ' + pageUrl);
-      
-      const logo = await extractLogoFromFederationPage(pageUrl, federation);
-      if (logo) {
-        return { url: logo, source: federation.name, pageUrl: pageUrl };
-      }
-    }
-    
-    return null;
-  } catch (error) {
-    console.log('⚠️ Erreur recherche fédération: ' + error.message);
-    return null;
-  }
-}
-
-/**
- * Extrait le logo depuis une page de fédération
- */
-async function extractLogoFromFederationPage(pageUrl, federation) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
-  
-  try {
-    const response = await axios.get(pageUrl, {
-      timeout: 5000,
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      maxContentLength: 500000
-    });
-    
-    clearTimeout(timeoutId);
-    
-    const html = response.data;
-    if (!html || typeof html !== 'string') return null;
-    
-    const foundUrls = [];
-    
-    // Utiliser les patterns spécifiques à la fédération
-    for (const pattern of federation.logoPatterns) {
-      pattern.lastIndex = 0;
-      const matches = html.match(pattern);
-      if (matches) {
-        for (const match of matches) {
-          if (!match.includes('favicon') && !match.includes('icon') && !foundUrls.includes(match)) {
-            foundUrls.push(match);
-          }
-        }
-      }
-    }
-    
-    // Chercher aussi les images avec des attributs pertinents (logo, club, ecusson, blason)
-    const imgMatches = html.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/gi);
-    if (imgMatches) {
-      for (const imgTag of imgMatches) {
-        // Vérifier si l'image a un attribut pertinent
-        if (imgTag.includes('logo') || imgTag.includes('club') || imgTag.includes('ecusson') || imgTag.includes('blason')) {
-          const srcMatch = imgTag.match(/src=["']([^"']+)["']/i);
-          if (srcMatch && srcMatch[1]) {
-            let imgUrl = srcMatch[1];
-            
-            // Convertir en URL absolue
-            if (imgUrl.startsWith('//')) {
-              imgUrl = 'https:' + imgUrl;
-            } else if (imgUrl.startsWith('/')) {
-              try {
-                const baseUrl = new URL(pageUrl);
-                imgUrl = baseUrl.origin + imgUrl;
-              } catch (e) { continue; }
-            } else if (!imgUrl.startsWith('http')) {
-              continue;
-            }
-            
-            if (!imgUrl.includes('favicon') && !foundUrls.includes(imgUrl)) {
-              foundUrls.push(imgUrl);
-            }
-          }
-        }
-      }
-    }
-    
-    // Chercher og:image comme fallback
-    const ogMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
-    if (ogMatch && ogMatch[1] && !foundUrls.includes(ogMatch[1])) {
-      foundUrls.push(ogMatch[1]);
-    }
-    
-    console.log('🏛️ ' + foundUrls.length + ' logos potentiels trouvés sur ' + federation.name);
-    
-    // Valider et retourner le premier logo valide
-    for (const logoUrl of foundUrls.slice(0, 3)) {
-      try {
-        const isValid = await isValidImageUrl(logoUrl);
-        if (isValid) {
-          console.log('✅ Logo ' + federation.name + ' trouvé: ' + logoUrl);
-          return logoUrl;
-        }
-      } catch (e) {}
-    }
-    
-    return null;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    console.log('⚠️ Erreur extraction page fédération: ' + error.message);
-    return null;
-  }
-}
-
-
-
 // ============ RECHERCHE DE LOGOS AMÉLIORÉE v5.7 ============
 
 /**
@@ -910,33 +696,9 @@ async function findAllLogos(clubName, besportLogo, sport, clubRowIndex = null) {
   
   console.log('🔍 Recherche logos pour: ' + clubName + ' (' + (sport || 'sport inconnu') + ')');
   
-  // 0. PRIORITÉ : Recherche sur le site de la fédération (FFBB, FFF, FFR, FFHandball)
-  const normalizedSport = normalizeSport(sport);
-  if (normalizedSport && FEDERATIONS[normalizedSport]) {
-    try {
-      const fedLogo = await Promise.race([
-        searchLogoFromFederation(clubName, sport),
-        new Promise(resolve => setTimeout(() => resolve(null), 12000))
-      ]);
-      
-      if (fedLogo && fedLogo.url && !seenUrls.has(fedLogo.url)) {
-        console.log('✅ Logo ' + fedLogo.source + ' trouvé');
-        // Détecter le nom avec Gemini et stocker
-        const logoData = await detectAndStoreLogo(fedLogo.url, 'federation_' + fedLogo.source.toLowerCase(), clubName, clubRowIndex);
-        
-        logos.push({
-          source: fedLogo.source,
-          url: fedLogo.url,
-          emoji: '🏛️',
-          detected_name: logoData?.detected_name || '',
-          confidence: logoData?.confidence || 'none'
-        });
-        seenUrls.add(fedLogo.url);
-      }
-    } catch (e) {
-      console.log('⚠️ Erreur fédération: ' + e.message);
-    }
-  }
+  // Note: La recherche par fédération (FFBB, FFF, FFR, FFHandball) est désormais
+  // gérée par le programme séparé src/enrichment/federation-logos.js
+  // pour éviter la surcharge mémoire sur Render
   
   // 1. Site officiel du club (avec timeout garanti)
   try {
@@ -1548,7 +1310,7 @@ function setupBotCommands() {
     const stats = await getStats();
     const mem = await logMemoryUsage('commande /start');
     bot.sendMessage(chatId,
-      '🎯 PPATCH Bot v5.17\n\n' +
+      '🎯 PPATCH Bot v5.18\n\n' +
       '🖼️ Logos: ' + stats.pendingLogo + ' à valider | ' + stats.createdLogo + ' créés\n' +
       '📧 Emails: ' + stats.pendingEmail + ' à valider | ' + stats.sentEmail + ' envoyés\n\n' +
       '📦 Cache: ' + clubCache.length + ' clubs pré-chargés\n' +
@@ -1970,7 +1732,7 @@ export async function startTelegramBot() {
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.17 redémarré !\n\n🏛️ Recherche fédérations (FFBB, FFF, FFR, FFHandball)');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.18 redémarré !\n\n📊 /mem et /check disponibles');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
