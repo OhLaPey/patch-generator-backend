@@ -1,12 +1,12 @@
 /**
- * PPATCH - Bot Telegram Unifié v5.16
+ * PPATCH - Bot Telegram Unifié v5.17
  * - /logo : Valider logos + créer pages
  * - /mail : Valider emails
  * - /sync : Synchroniser avec Shopify
  * - /stats : Statistiques
  * 
- * v5.16: Base de données de logos avec détection Gemini
- *        Stockage dans feuille "Logos_DB" cachée
+ * v5.17: Recherche par fédération (FFBB, FFF, FFR, FFHandball)
+ *        Logos officiels en priorité selon le sport
  */
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -40,12 +40,123 @@ const userState = new Map();
 
 // Cache pour pré-chargement des clubs
 // IMPORTANT: On stocke rowIndex (number) au lieu de l'objet row
+// v5.17: Réduit à 3 pour économiser la mémoire (plan gratuit Render 512MB)
 const clubCache = [];
-const CACHE_SIZE = 5;
+const CACHE_SIZE = 3;
 let isCacheLoading = false;
 
 // Set des rowIndex en cours de traitement (pour éviter les doublons)
 const processingRows = new Set();
+
+// ============ MONITORING MÉMOIRE v5.17 ============
+
+let lastMemoryAlert = 0;
+const MEMORY_ALERT_THRESHOLD = 400; // MB
+const MEMORY_ALERT_COOLDOWN = 60000; // 1 minute entre chaque alerte
+
+/**
+ * Log la mémoire utilisée et envoie une alerte si nécessaire
+ */
+async function logMemoryUsage(context = '') {
+  const used = process.memoryUsage();
+  const heapUsedMB = Math.round(used.heapUsed / 1024 / 1024);
+  const heapTotalMB = Math.round(used.heapTotal / 1024 / 1024);
+  const rssMB = Math.round(used.rss / 1024 / 1024);
+  
+  console.log('📊 RAM: ' + heapUsedMB + 'MB / ' + heapTotalMB + 'MB (RSS: ' + rssMB + 'MB)' + (context ? ' - ' + context : ''));
+  
+  // Alerte si mémoire haute
+  if (heapUsedMB > MEMORY_ALERT_THRESHOLD && Date.now() - lastMemoryAlert > MEMORY_ALERT_COOLDOWN) {
+    lastMemoryAlert = Date.now();
+    console.log('⚠️ ALERTE: Mémoire haute (' + heapUsedMB + 'MB) !');
+    
+    if (bot && CONFIG.adminChatId) {
+      try {
+        await bot.sendMessage(CONFIG.adminChatId, 
+          '⚠️ ALERTE MÉMOIRE\n\n' +
+          '📊 Heap: ' + heapUsedMB + 'MB / ' + heapTotalMB + 'MB\n' +
+          '📊 RSS: ' + rssMB + 'MB\n' +
+          '⏱️ Seuil: ' + MEMORY_ALERT_THRESHOLD + 'MB\n\n' +
+          '💡 Risque de crash si ça continue.\n' +
+          'Le cache contient ' + clubCache.length + ' clubs.'
+        );
+      } catch (e) {
+        console.log('⚠️ Impossible d\'envoyer l\'alerte mémoire');
+      }
+    }
+  }
+  
+  return { heapUsedMB, heapTotalMB, rssMB };
+}
+
+/**
+ * Vérifie et répare les clubs bloqués en "processing"
+ */
+async function checkAndFixStuckClubs(chatId = null) {
+  try {
+    if (!sheet) return { found: 0, fixed: 0, clubs: [] };
+    
+    const rows = await sheet.getRows();
+    const stuckClubs = [];
+    const now = Date.now();
+    const STUCK_THRESHOLD = 10 * 60 * 1000; // 10 minutes
+    
+    for (const row of rows) {
+      const status = row.get('Statut_Shopify');
+      
+      // Chercher les clubs en "processing"
+      if (status === 'processing') {
+        const clubName = row.get('Club') || row.get('Nom') || 'Inconnu';
+        stuckClubs.push({
+          row: row,
+          name: clubName,
+          rowNumber: row.rowNumber
+        });
+      }
+    }
+    
+    // Réparer les clubs bloqués
+    const fixedClubs = [];
+    for (const club of stuckClubs) {
+      try {
+        club.row.set('Statut_Shopify', '');
+        await club.row.save();
+        fixedClubs.push(club.name);
+        console.log('🔧 Club débloqué: ' + club.name);
+      } catch (e) {
+        console.log('⚠️ Erreur déblocage ' + club.name + ': ' + e.message);
+      }
+    }
+    
+    const result = {
+      found: stuckClubs.length,
+      fixed: fixedClubs.length,
+      clubs: fixedClubs
+    };
+    
+    // Envoyer le rapport si demandé
+    if (chatId && bot) {
+      if (result.found === 0) {
+        await bot.sendMessage(chatId, '✅ Aucun club bloqué en "processing"\n\nTout est OK !');
+      } else {
+        await bot.sendMessage(chatId,
+          '🔧 Vérification des clubs bloqués\n\n' +
+          '⚠️ ' + result.found + ' club(s) étaient bloqués en "processing":\n' +
+          result.clubs.map(c => '• ' + c + ' → remis à vide ✅').join('\n') + '\n\n' +
+          '💡 Tu peux relancer /logo pour les re-traiter.'
+        );
+      }
+    }
+    
+    return result;
+  } catch (error) {
+    console.log('⚠️ Erreur checkAndFixStuckClubs: ' + error.message);
+    if (chatId && bot) {
+      await bot.sendMessage(chatId, '❌ Erreur vérification: ' + error.message);
+    }
+    return { found: 0, fixed: 0, clubs: [] };
+  }
+}
 
 async function initGoogleSheets() {
   const auth = new JWT({
@@ -260,6 +371,220 @@ async function verifyLogo(logoUrl, clubName, clubRowIndex) {
   } catch (error) {
     console.log('⚠️ Erreur verifyLogo: ' + error.message);
     return false;
+  }
+}
+
+// ============ RECHERCHE PAR FÉDÉRATION v5.17 ============
+
+/**
+ * Mapping sport -> fédération
+ */
+const FEDERATIONS = {
+  'basketball': {
+    name: 'FFBB',
+    searchDomain: 'ffbb.com',
+    logoPatterns: [
+      /https?:\/\/[^"'\s]+\.ffbb\.com[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
+      /https?:\/\/[^"'\s]*ffbb[^"'\s]*\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
+      /https?:\/\/[^"'\s]*ffbb[^"'\s]*\/[^"'\s]*club[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi
+    ]
+  },
+  'basket': {
+    name: 'FFBB',
+    searchDomain: 'ffbb.com',
+    logoPatterns: [
+      /https?:\/\/[^"'\s]+\.ffbb\.com[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
+      /https?:\/\/[^"'\s]*ffbb[^"'\s]*\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi
+    ]
+  },
+  'football': {
+    name: 'FFF',
+    searchDomain: 'fff.fr',
+    logoPatterns: [
+      /https?:\/\/[^"'\s]+\.fff\.fr[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
+      /https?:\/\/[^"'\s]*fff[^"'\s]*\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
+      /https?:\/\/[^"'\s]*footeo[^"'\s]*\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi
+    ]
+  },
+  'rugby': {
+    name: 'FFR',
+    searchDomain: 'ffr.fr',
+    logoPatterns: [
+      /https?:\/\/[^"'\s]+\.ffr\.fr[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
+      /https?:\/\/[^"'\s]*ffr[^"'\s]*\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
+      /https?:\/\/[^"'\s]*ffr[^"'\s]*\/[^"'\s]*club[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi
+    ]
+  },
+  'handball': {
+    name: 'FFHandball',
+    searchDomain: 'ffhandball.fr',
+    logoPatterns: [
+      /https?:\/\/[^"'\s]+\.ffhandball\.fr[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
+      /https?:\/\/[^"'\s]*ffhandball[^"'\s]*\/[^"'\s]*logo[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
+      /https?:\/\/[^"'\s]*monclub\.ffhandball[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi
+    ]
+  },
+  'hand': {
+    name: 'FFHandball',
+    searchDomain: 'ffhandball.fr',
+    logoPatterns: [
+      /https?:\/\/[^"'\s]+\.ffhandball\.fr[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi,
+      /https?:\/\/[^"'\s]*monclub\.ffhandball[^"'\s]*\.(?:png|jpg|jpeg|webp)/gi
+    ]
+  }
+};
+
+/**
+ * Normalise le nom du sport pour le mapping
+ */
+function normalizeSport(sport) {
+  if (!sport) return null;
+  const s = sport.toLowerCase().trim();
+  
+  if (s.includes('basket')) return 'basketball';
+  if (s.includes('foot') && !s.includes('volley')) return 'football';
+  if (s.includes('rugby')) return 'rugby';
+  if (s.includes('hand') && !s.includes('beach')) return 'handball';
+  
+  return s;
+}
+
+/**
+ * Cherche le logo d'un club sur le site de sa fédération
+ */
+async function searchLogoFromFederation(clubName, sport) {
+  const normalizedSport = normalizeSport(sport);
+  const federation = FEDERATIONS[normalizedSport];
+  
+  if (!federation) {
+    console.log('⚠️ Pas de fédération pour le sport: ' + sport);
+    return null;
+  }
+  
+  console.log('🏛️ Recherche ' + federation.name + ' pour: ' + clubName);
+  
+  try {
+    // Chercher la page du club sur le site de la fédération via Google
+    const query = 'site:' + federation.searchDomain + ' "' + clubName + '"';
+    const searchUrl = 'https://www.googleapis.com/customsearch/v1?key=' + CONFIG.googleApiKey + 
+                      '&cx=' + CONFIG.googleCx + '&q=' + encodeURIComponent(query) + '&num=3';
+    
+    const res = await axios.get(searchUrl, { timeout: 10000 });
+    
+    if (!res.data.items || res.data.items.length === 0) {
+      console.log('⚠️ Aucun résultat ' + federation.name);
+      return null;
+    }
+    
+    // Parcourir les résultats et extraire le logo
+    for (const item of res.data.items) {
+      const pageUrl = item.link;
+      console.log('🏛️ Page ' + federation.name + ': ' + pageUrl);
+      
+      const logo = await extractLogoFromFederationPage(pageUrl, federation);
+      if (logo) {
+        return { url: logo, source: federation.name, pageUrl: pageUrl };
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.log('⚠️ Erreur recherche fédération: ' + error.message);
+    return null;
+  }
+}
+
+/**
+ * Extrait le logo depuis une page de fédération
+ */
+async function extractLogoFromFederationPage(pageUrl, federation) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+  
+  try {
+    const response = await axios.get(pageUrl, {
+      timeout: 5000,
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      maxContentLength: 500000
+    });
+    
+    clearTimeout(timeoutId);
+    
+    const html = response.data;
+    if (!html || typeof html !== 'string') return null;
+    
+    const foundUrls = [];
+    
+    // Utiliser les patterns spécifiques à la fédération
+    for (const pattern of federation.logoPatterns) {
+      pattern.lastIndex = 0;
+      const matches = html.match(pattern);
+      if (matches) {
+        for (const match of matches) {
+          if (!match.includes('favicon') && !match.includes('icon') && !foundUrls.includes(match)) {
+            foundUrls.push(match);
+          }
+        }
+      }
+    }
+    
+    // Chercher aussi les images avec des attributs pertinents (logo, club, ecusson, blason)
+    const imgMatches = html.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/gi);
+    if (imgMatches) {
+      for (const imgTag of imgMatches) {
+        // Vérifier si l'image a un attribut pertinent
+        if (imgTag.includes('logo') || imgTag.includes('club') || imgTag.includes('ecusson') || imgTag.includes('blason')) {
+          const srcMatch = imgTag.match(/src=["']([^"']+)["']/i);
+          if (srcMatch && srcMatch[1]) {
+            let imgUrl = srcMatch[1];
+            
+            // Convertir en URL absolue
+            if (imgUrl.startsWith('//')) {
+              imgUrl = 'https:' + imgUrl;
+            } else if (imgUrl.startsWith('/')) {
+              try {
+                const baseUrl = new URL(pageUrl);
+                imgUrl = baseUrl.origin + imgUrl;
+              } catch (e) { continue; }
+            } else if (!imgUrl.startsWith('http')) {
+              continue;
+            }
+            
+            if (!imgUrl.includes('favicon') && !foundUrls.includes(imgUrl)) {
+              foundUrls.push(imgUrl);
+            }
+          }
+        }
+      }
+    }
+    
+    // Chercher og:image comme fallback
+    const ogMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+    if (ogMatch && ogMatch[1] && !foundUrls.includes(ogMatch[1])) {
+      foundUrls.push(ogMatch[1]);
+    }
+    
+    console.log('🏛️ ' + foundUrls.length + ' logos potentiels trouvés sur ' + federation.name);
+    
+    // Valider et retourner le premier logo valide
+    for (const logoUrl of foundUrls.slice(0, 3)) {
+      try {
+        const isValid = await isValidImageUrl(logoUrl);
+        if (isValid) {
+          console.log('✅ Logo ' + federation.name + ' trouvé: ' + logoUrl);
+          return logoUrl;
+        }
+      } catch (e) {}
+    }
+    
+    return null;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    console.log('⚠️ Erreur extraction page fédération: ' + error.message);
+    return null;
   }
 }
 
@@ -583,7 +908,35 @@ async function findAllLogos(clubName, besportLogo, sport, clubRowIndex = null) {
   const logos = [];
   const seenUrls = new Set();
   
-  console.log('🔍 Recherche logos pour: ' + clubName);
+  console.log('🔍 Recherche logos pour: ' + clubName + ' (' + (sport || 'sport inconnu') + ')');
+  
+  // 0. PRIORITÉ : Recherche sur le site de la fédération (FFBB, FFF, FFR, FFHandball)
+  const normalizedSport = normalizeSport(sport);
+  if (normalizedSport && FEDERATIONS[normalizedSport]) {
+    try {
+      const fedLogo = await Promise.race([
+        searchLogoFromFederation(clubName, sport),
+        new Promise(resolve => setTimeout(() => resolve(null), 12000))
+      ]);
+      
+      if (fedLogo && fedLogo.url && !seenUrls.has(fedLogo.url)) {
+        console.log('✅ Logo ' + fedLogo.source + ' trouvé');
+        // Détecter le nom avec Gemini et stocker
+        const logoData = await detectAndStoreLogo(fedLogo.url, 'federation_' + fedLogo.source.toLowerCase(), clubName, clubRowIndex);
+        
+        logos.push({
+          source: fedLogo.source,
+          url: fedLogo.url,
+          emoji: '🏛️',
+          detected_name: logoData?.detected_name || '',
+          confidence: logoData?.confidence || 'none'
+        });
+        seenUrls.add(fedLogo.url);
+      }
+    } catch (e) {
+      console.log('⚠️ Erreur fédération: ' + e.message);
+    }
+  }
   
   // 1. Site officiel du club (avec timeout garanti)
   try {
@@ -613,7 +966,7 @@ async function findAllLogos(clubName, besportLogo, sport, clubRowIndex = null) {
             seenUrls.add(url);
           }
         }
-      } else {
+      } else if (!seenUrls.has(officialLogo.url)) {
         console.log('✅ Logo site officiel trouvé');
         // Détecter le nom avec Gemini et stocker
         const logoData = await detectAndStoreLogo(officialLogo.url, 'site_officiel', clubName, clubRowIndex);
@@ -760,6 +1113,8 @@ async function preloadClubLogos() {
   if (isCacheLoading) return;
   isCacheLoading = true;
   
+  await logMemoryUsage('début pré-chargement');
+  
   try {
     let attempts = 0;
     const maxAttempts = 20; // Éviter boucle infinie
@@ -777,6 +1132,8 @@ async function preloadClubLogos() {
         
         console.log('📦 Pré-chargement: ' + clubInfo.data.club);
         const logos = await findAllLogos(clubInfo.data.club, clubInfo.data.logo, clubInfo.data.sport, clubInfo.rowIndex);
+        
+        await logMemoryUsage('après recherche ' + clubInfo.data.club);
         
         // Si aucun logo fiable, marquer comme "difficile" et passer au suivant
         if (logos.length === 0) {
@@ -1098,6 +1455,8 @@ async function addToBrevo(email, clubName, sport, ville) {
 
 async function createClubShopifyPage(clubData, selectedLogoUrl) {
   try {
+    await logMemoryUsage('début création Shopify ' + clubData.club);
+    
     const { processClub } = await import('../shopify/push-products.js');
     const club = {
       name: clubData.club,
@@ -1110,6 +1469,9 @@ async function createClubShopifyPage(clubData, selectedLogoUrl) {
     };
     console.log('🏭 Création page Shopify pour ' + club.name + ' avec logo: ' + selectedLogoUrl);
     const result = await processClub(club);
+    
+    await logMemoryUsage('fin création Shopify ' + clubData.club);
+    
     if (result && result.success) {
       return {
         success: true,
@@ -1124,6 +1486,7 @@ async function createClubShopifyPage(clubData, selectedLogoUrl) {
     }
   } catch (error) {
     console.error('❌ Erreur création page: ' + error.message);
+    await logMemoryUsage('erreur création Shopify');
     return {
       success: false,
       error: error.message
@@ -1183,12 +1546,21 @@ function setupBotCommands() {
       return bot.sendMessage(chatId, '❌ Accès non autorisé\n\nTon Chat ID: ' + chatId);
     }
     const stats = await getStats();
+    const mem = await logMemoryUsage('commande /start');
     bot.sendMessage(chatId,
-      '🎯 PPATCH Bot v5.16\n\n' +
+      '🎯 PPATCH Bot v5.17\n\n' +
       '🖼️ Logos: ' + stats.pendingLogo + ' à valider | ' + stats.createdLogo + ' créés\n' +
       '📧 Emails: ' + stats.pendingEmail + ' à valider | ' + stats.sentEmail + ' envoyés\n\n' +
       '📦 Cache: ' + clubCache.length + ' clubs pré-chargés\n' +
-      '🔄 Processing: ' + processingRows.size + ' en cours'
+      '🧠 RAM: ' + mem.heapUsedMB + 'MB / ' + mem.heapTotalMB + 'MB\n\n' +
+      '📋 Commandes:\n' +
+      '/logo - Valider logos\n' +
+      '/mail - Valider emails\n' +
+      '/stats - Statistiques\n' +
+      '/mem - État mémoire\n' +
+      '/check - Réparer clubs bloqués\n' +
+      '/sync - Sync Shopify\n' +
+      '/clearcache - Vider le cache'
     );
     preloadClubLogos();
   });
@@ -1239,6 +1611,30 @@ function setupBotCommands() {
     processingRows.clear();
     bot.sendMessage(chatId, '🧹 Cache vidé !');
     preloadClubLogos();
+  });
+
+  // Commande pour vérifier les clubs bloqués
+  bot.onText(/\/check/, async function(msg) {
+    const chatId = msg.chat.id;
+    if (!isAuthorized(chatId)) return;
+    await bot.sendMessage(chatId, '🔍 Vérification des clubs bloqués en cours...');
+    await checkAndFixStuckClubs(chatId);
+  });
+
+  // Commande pour voir la mémoire
+  bot.onText(/\/mem/, async function(msg) {
+    const chatId = msg.chat.id;
+    if (!isAuthorized(chatId)) return;
+    const mem = await logMemoryUsage('commande /mem');
+    await bot.sendMessage(chatId,
+      '📊 État de la mémoire\n\n' +
+      '🧠 Heap utilisé: ' + mem.heapUsedMB + 'MB\n' +
+      '🧠 Heap total: ' + mem.heapTotalMB + 'MB\n' +
+      '💾 RSS: ' + mem.rssMB + 'MB\n\n' +
+      '⚠️ Seuil alerte: ' + MEMORY_ALERT_THRESHOLD + 'MB\n' +
+      '📦 Cache: ' + clubCache.length + ' clubs\n' +
+      '🔄 Processing: ' + processingRows.size + ' en cours'
+    );
   });
 
   bot.on('callback_query', handleCallbackQuery);
@@ -1574,7 +1970,7 @@ export async function startTelegramBot() {
     
     if (CONFIG.adminChatId) {
       try {
-        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.16 redémarré !\n\n🤖 Détection Gemini + Base Logos_DB');
+        await bot.sendMessage(CONFIG.adminChatId, '🤖 Bot PPATCH v5.17 redémarré !\n\n🏛️ Recherche fédérations (FFBB, FFF, FFR, FFHandball)');
       } catch (e) {
         console.log('⚠️ Impossible de notifier l\'admin');
       }
